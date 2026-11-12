@@ -1,5 +1,6 @@
 // Text -> speech. ElevenLabs (expressive, understands [laughs]-style tags) or any OpenAI-compatible /audio/speech.
 // Most ElevenLabs plans only allow a couple of generations at once; extra sentences wait in line instead of failing.
+const { extraHeaders } = require('./headers');
 
 // Remove what must not be read aloud. Bracket tags stay for ElevenLabs v3, are dropped for other voices.
 function speakable(s, keepTags = true) {
@@ -37,12 +38,12 @@ function createTts(cfg, fetcher = fetch) {
     if (cfg.tts.provider === 'openai') {
       const o = cfg.tts.openai;
       return fetcher(`${o.base}/audio/speech`, { method: 'POST', signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${o.key}` },
+        headers: extraHeaders('TTS_EXTRA_HEADERS', { 'Content-Type': 'application/json', Authorization: `Bearer ${o.key}` }),
         body: JSON.stringify({ model: o.model, voice: o.voice, input: text, response_format: 'mp3' }) });
     }
     const e = cfg.tts.eleven;
     if (!e.key || !e.voice) throw Object.assign(new Error('ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are required'), { status: 400 });
-    const headers = { 'Content-Type': 'application/json', Accept: 'audio/mpeg', 'xi-api-key': e.key };
+    const headers = extraHeaders('TTS_EXTRA_HEADERS', { 'Content-Type': 'application/json', Accept: 'audio/mpeg', 'xi-api-key': e.key });
     if (e.model === 'eleven_v4') // v4 is served through the dialogue endpoint
       return fetcher(`${e.base}/v1/text-to-dialogue/stream?output_format=mp3_44100_64`, { method: 'POST', signal, headers,
         body: JSON.stringify({ model_id: e.model, inputs: [{ text, voice_id: e.voice }] }) });

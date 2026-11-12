@@ -1,4 +1,6 @@
 // Streams one reply from an OpenAI-compatible chat endpoint.
+const { extraHeaders } = require('./headers');
+
 async function* sse(body) {
   const reader = body.getReader(), dec = new TextDecoder();
   let buf = '';
@@ -20,7 +22,7 @@ async function* sse(body) {
 async function streamChat({ base, key, model, messages, signal, onDelta, fetcher = fetch }) {
   const res = await fetcher(`${base}/chat/completions`, {
     method: 'POST', signal,
-    headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+    headers: extraHeaders('LLM_EXTRA_HEADERS', { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) }),
     body: JSON.stringify({ model, messages, stream: true, temperature: 0.8 }),
   });
   if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`model error ${res.status}: ${t.slice(0, 300)}`); }
