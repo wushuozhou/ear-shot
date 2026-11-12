@@ -43,9 +43,14 @@ const DEFAULT_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
 const selfTestMode = process.argv.includes('--self-test');
-const rootDir = app.isPackaged
-  ? path.join(process.resourcesPath, 'earshot')
-  : path.resolve(__dirname, '..');
+const devRoot = path.resolve(__dirname, '..');
+const packedRoot = path.join(process.resourcesPath, 'earshot');
+// 不直接依赖 app.isPackaged，因为直接调 electron.exe 时它也可能为 true。
+const rootDir = fs.existsSync(path.join(devRoot, 'server', 'index.js'))
+  ? devRoot
+  : fs.existsSync(path.join(packedRoot, 'server', 'index.js'))
+    ? packedRoot
+    : devRoot;
 const serverScript = path.join(rootDir, 'server', 'index.js');
 
 let mainWindow;
