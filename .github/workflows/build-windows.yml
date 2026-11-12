@@ -64,26 +64,24 @@ jobs:
           $logPath = Join-Path $env:APPDATA "earshot-desktop\logs\desktop.log"
           Write-Host "日志路径：$logPath"
           if (Test-Path $logPath) {
-            $logContent = Get-Content -Path $logPath -Raw
-            Write-Host $logContent
+            Write-Host "---- desktop.log ----"
+            Get-Content -Path $logPath
           } else {
-            $logContent = ""
-            Write-Host "日志文件不存在。"
+            Write-Host "没有生成 desktop.log"
           }
 
-          $logReady = $logContent.Contains("服务探活成功") -or $logContent.Contains("正在启动服务（端口")
-          if (-not $alive -or -not $logReady) {
-            Write-Host "冒烟测试失败：进程存活=$alive，日志包含服务启动记录=$logReady"
-            if (-not $p.HasExited) {
-              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            }
-            Get-Process Earshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $logText = if (Test-Path $logPath) { Get-Content $logPath -Raw } else { "" }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Process Earshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $alive) {
+            Write-Host "冒烟测试失败：进程启动后已退出"
             exit 1
           }
-
-          Write-Host "冒烟测试通过：应用进程仍在运行且日志包含服务启动记录。"
-          Stop-Process -Id $p.Id -Force
-          Get-Process Earshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if ($logText -notmatch "服务探活成功") {
+            Write-Host "冒烟测试失败：日志中没有出现服务探活成功"
+            exit 1
+          }
+          Write-Host "冒烟测试通过"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
