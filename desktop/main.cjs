@@ -1,11 +1,30 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const path = require('path');
 
-const { configPath, loadConfig, launchEnvironment } = require('./config.cjs');
+const {
+  configPath,
+  getProviderKey,
+  loadConfig,
+  launchEnvironment,
+  saveProfiles,
+  saveProviders,
+  setActiveProfile,
+  setProviderKey,
+  writeConfig,
+} = require('./config.cjs');
+const {
+  addProfile,
+  addProvider,
+  deleteProvider,
+  resolveLaunchEnv,
+  updateProfile,
+  updateProvider,
+} = require('./providers.cjs');
+const { testProvider } = require('./provider-test.cjs');
 
 const DEFAULT_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -172,7 +191,17 @@ async function startService({ resetRestarts = false } = {}) {
 
   try {
     servicePort = await findAvailablePort(Number(config.port) || DEFAULT_PORT);
-    const env = launchEnvironment(app, config, rootDir, servicePort);
+    const activeProfile = config.profiles.find(item => item.id === config.activeProfileId);
+    const runtimeProviders = config.providers.map(provider => ({
+      ...provider,
+      apiKey: getProviderKey(config, provider.id, safeStorage),
+    }));
+    // Launch priority: resolved Profile values > config.json env > root .env
+    // > inherited environment. Provider secrets are decrypted only in this process.
+    const profileEnv = activeProfile
+      ? resolveLaunchEnv(activeProfile, runtimeProviders)
+      : {};
+    const env = launchEnvironment(app, config, rootDir, servicePort, profileEnv, safeStorage);
     service = spawn(process.execPath, [serverScript], {
       cwd: rootDir,
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
@@ -216,6 +245,63 @@ function registerIpc() {
   ipcMain.handle('desktop:retry', () => startService({ resetRestarts: true }));
   ipcMain.handle('desktop:get-status', () => state);
   ipcMain.handle('desktop:open-logs-dir', () => shell.openPath(path.dirname(logFile)));
+  ipcMain.handle('providers:list', () => ({
+    providers: config.providers.map(provider => {
+      const { apiKey, ...safeProvider } = provider;
+      return safeProvider;
+    }),
+    profiles: config.profiles,
+    activeProfileId: config.activeProfileId,
+  }));
+  ipcMain.handle('providers:save', (_event, input) => {
+    const value = input?.provider || input;
+    if (!value || typeof value.id !== 'string' || typeof value.kind !== 'string') throw new Error('Provider 参数不完整');
+    if (!['llm', 'stt', 'tts'].includes(value.kind)) throw new Error('Provider kind 无效');
+    const exists = config.providers.some(provider => provider.id === value.id);
+    config = exists
+      ? saveProviders(app, updateProvider(config.providers, value.id, value), safeStorage)
+      : saveProviders(app, addProvider(config.providers, value), safeStorage);
+    return { providers: config.providers.map(({ apiKey, ...provider }) => provider) };
+  });
+  ipcMain.handle('providers:delete', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('Provider id 必须是字符串');
+    const providers = deleteProvider(config.providers, id);
+    const providerKeys = { ...config.providerKeys };
+    delete providerKeys[id];
+    writeConfig(app, { ...config, providers, providerKeys }, safeStorage);
+    config = loadConfig(app, { safeStorage });
+    return { providers: config.providers.map(({ apiKey, ...provider }) => provider) };
+  });
+  ipcMain.handle('providers:set-key', (_event, input) => {
+    if (!input || typeof input.id !== 'string' || typeof input.key !== 'string') throw new Error('Provider 密钥参数无效');
+    config = setProviderKey(app, input.id, input.key, safeStorage);
+    return { ok: true };
+  });
+  ipcMain.handle('providers:test', async (_event, id) => {
+    if (typeof id !== 'string') throw new Error('Provider id 必须是字符串');
+    const provider = config.providers.find(item => item.id === id);
+    if (!provider) throw new Error(`找不到 Provider：${id}`);
+    return testProvider({ ...provider, apiKey: getProviderKey(config, id, safeStorage) });
+  });
+  ipcMain.handle('profiles:list', () => ({
+    profiles: config.profiles,
+    activeProfileId: config.activeProfileId,
+  }));
+  ipcMain.handle('profiles:save', (_event, input) => {
+    const value = input?.profile || input;
+    if (!value || typeof value.id !== 'string') throw new Error('Profile id 必须是字符串');
+    const exists = config.profiles.some(profile => profile.id === value.id);
+    const profiles = exists
+      ? updateProfile(config.profiles, value.id, value)
+      : addProfile(config.profiles, value);
+    config = saveProfiles(app, profiles, safeStorage);
+    return { profiles: config.profiles, activeProfileId: config.activeProfileId };
+  });
+  ipcMain.handle('profiles:set-active', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('Profile id 必须是字符串');
+    config = setActiveProfile(app, id, safeStorage);
+    return { profiles: config.profiles, activeProfileId: config.activeProfileId };
+  });
 }
 
 async function bootstrap() {
@@ -225,7 +311,7 @@ async function bootstrap() {
   writeLog(`桌面外壳启动，userData=${app.getPath('userData')}`);
 
   try {
-    config = loadConfig(app);
+    config = loadConfig(app, { safeStorage });
   } catch (error) {
     publish({ status: 'failed', message: error.message });
   }

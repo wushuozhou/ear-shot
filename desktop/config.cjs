@@ -1,44 +1,136 @@
 const fs = require('fs');
 const path = require('path');
+const {
+  getBuiltinProviders,
+  getDefaultProfiles,
+  updateProvider,
+} = require('./providers.cjs');
 
 const DEFAULT_CONFIG = {
-  version: 1,
+  version: 2,
   port: 8787,
   env: {},
   dataDir: '',
   installDirHint: '',
+  providers: [],
+  profiles: [],
+  activeProfileId: '',
+  providerKeys: {},
+  envSecrets: {},
 };
 
 function configPath(app) {
   return path.join(app.getPath('userData'), 'config.json');
 }
 
-function mergeConfig(value) {
+function getElectronSafeStorage() {
+  try {
+    return require('electron').safeStorage;
+  } catch (_) {
+    return null;
+  }
+}
+
+function encryptSecret(value, safeStorage = getElectronSafeStorage()) {
+  const text = String(value || '');
+  if (safeStorage?.isEncryptionAvailable?.()) {
+    return {
+      encoding: 'safeStorage',
+      value: safeStorage.encryptString(text).toString('base64'),
+    };
+  }
+  return { encoding: 'plain', value: text };
+}
+
+function decryptSecret(record, safeStorage = getElectronSafeStorage()) {
+  if (!record) return '';
+  if (typeof record === 'string') return record;
+  if (record.encoding === 'safeStorage' && safeStorage?.isEncryptionAvailable?.()) {
+    try { return safeStorage.decryptString(Buffer.from(record.value, 'base64')); } catch (_) { return ''; }
+  }
+  return record.encoding === 'plain' ? String(record.value || '') : '';
+}
+
+function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
   const source = value && typeof value === 'object' ? value : {};
+  const providers = Array.isArray(source.providers) && source.providers.length
+    ? source.providers
+    : getBuiltinProviders();
+  const profiles = Array.isArray(source.profiles) && source.profiles.length
+    ? source.profiles
+    : getDefaultProfiles();
+  const activeProfileId = source.activeProfileId || profiles[0]?.id || '';
+  const providerKeys = { ...(source.providerKeys && typeof source.providerKeys === 'object' ? source.providerKeys : {}) };
+  const env = {
+    ...DEFAULT_CONFIG.env,
+    ...(source.env && typeof source.env === 'object' ? source.env : {}),
+  };
+  const envSecrets = {
+    ...DEFAULT_CONFIG.envSecrets,
+    ...(source.envSecrets && typeof source.envSecrets === 'object' ? source.envSecrets : {}),
+  };
+
+  // Migrate the original env-only desktop config without discarding values.
+  if (!source.providers || !source.profiles || !source.providerKeys) {
+    const secretEnvNames = Object.keys(env).filter(key => /(?:API_KEY|ACCESS_TOKEN|TOKEN|SECRET)/i.test(key));
+    for (const key of secretEnvNames) {
+      envSecrets[key] = envSecrets[key] || encryptSecret(env[key], safeStorage);
+      delete env[key];
+    }
+    let migratedProviders = providers;
+    const replace = (id, patch) => { migratedProviders = updateProvider(migratedProviders, id, patch); };
+    if (source.env?.LLM_BASE_URL) replace('builtin-llm-openai', { baseUrl: source.env.LLM_BASE_URL, model: source.env.LLM_MODEL || 'gpt-4o-mini' });
+    if (source.env?.STT_BASE_URL) replace('builtin-stt-openai', { baseUrl: source.env.STT_BASE_URL, model: source.env.STT_MODEL || 'whisper-1' });
+    if (source.env?.TTS_PROVIDER === 'elevenlabs') {
+      replace('builtin-tts-elevenlabs', { baseUrl: source.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io', model: source.env.ELEVENLABS_MODEL || 'eleven_v3', voice: source.env.ELEVENLABS_VOICE_ID || '' });
+    } else if (source.env?.OPENAI_TTS_BASE_URL) {
+      replace('builtin-tts-openai', { baseUrl: source.env.OPENAI_TTS_BASE_URL, model: source.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts', voice: source.env.OPENAI_TTS_VOICE || 'alloy' });
+    }
+    const keyFor = name => envSecrets[name];
+    if (keyFor('LLM_API_KEY')) providerKeys['builtin-llm-openai'] ||= keyFor('LLM_API_KEY');
+    if (keyFor('STT_API_KEY')) providerKeys['builtin-stt-openai'] ||= keyFor('STT_API_KEY');
+    if (source.env?.TTS_PROVIDER === 'elevenlabs' && keyFor('ELEVENLABS_API_KEY')) providerKeys['builtin-tts-elevenlabs'] ||= keyFor('ELEVENLABS_API_KEY');
+    if (source.env?.TTS_PROVIDER !== 'elevenlabs' && keyFor('OPENAI_TTS_API_KEY')) providerKeys['builtin-tts-openai'] ||= keyFor('OPENAI_TTS_API_KEY');
+    return {
+      ...DEFAULT_CONFIG,
+      ...source,
+      version: 2,
+      env,
+      envSecrets,
+      providers: migratedProviders,
+      profiles,
+      activeProfileId,
+      providerKeys,
+    };
+  }
+
   return {
     ...DEFAULT_CONFIG,
     ...source,
-    env: {
-      ...DEFAULT_CONFIG.env,
-      ...(source.env && typeof source.env === 'object' ? source.env : {}),
-    },
+    version: 2,
+    env,
+    envSecrets,
+    providers,
+    profiles,
+    activeProfileId,
+    providerKeys,
   };
 }
 
-function writeConfig(app, value) {
+function writeConfig(app, value, safeStorage = getElectronSafeStorage()) {
   const file = configPath(app);
   const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true });
   const temporary = `${file}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(mergeConfig(value), null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(temporary, `${JSON.stringify(mergeConfig(value, safeStorage), null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
 }
 
-function loadConfig(app) {
+function loadConfig(app, { safeStorage = getElectronSafeStorage() } = {}) {
   const file = configPath(app);
   if (!fs.existsSync(file)) {
-    const config = mergeConfig({});
-    writeConfig(app, config);
+    const config = mergeConfig({}, safeStorage);
+    writeConfig(app, config, safeStorage);
     return config;
   }
 
@@ -48,8 +140,8 @@ function loadConfig(app) {
   } catch (error) {
     throw new Error(`配置文件无法读取：${error.message}`);
   }
-  const config = mergeConfig(parsed);
-  if (JSON.stringify(config) !== JSON.stringify(parsed)) writeConfig(app, config);
+  const config = mergeConfig(parsed, safeStorage);
+  if (JSON.stringify(config) !== JSON.stringify(parsed)) writeConfig(app, config, safeStorage);
   return config;
 }
 
@@ -66,23 +158,68 @@ function readDotEnv(file) {
   return result;
 }
 
-function launchEnvironment(app, config, rootDir, port) {
+function launchEnvironment(app, config, rootDir, port, profileEnv = {}, safeStorage = getElectronSafeStorage()) {
   // Priority is config.json first, then the root .env file, then inherited process
   // variables for unrelated runtime settings. Secrets stay in the main process and
   // are passed only to the child service; they are never returned to the renderer.
   const dotenv = readDotEnv(path.join(rootDir, '.env'));
+  const storedSecrets = Object.fromEntries(
+    Object.entries(config.envSecrets || {}).map(([key, record]) => [key, decryptSecret(record, safeStorage)]),
+  );
   return {
     ...process.env,
     ...dotenv,
     ...(config.env || {}),
+    ...storedSecrets,
+    ...profileEnv,
     PORT: String(port),
   };
+}
+
+function saveProviders(app, providers, safeStorage) {
+  const config = loadConfig(app, { safeStorage });
+  const next = { ...config, providers };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
+function saveProfiles(app, profiles, safeStorage) {
+  const config = loadConfig(app, { safeStorage });
+  const next = { ...config, profiles };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
+function setActiveProfile(app, activeProfileId, safeStorage) {
+  const config = loadConfig(app, { safeStorage });
+  const next = { ...config, activeProfileId };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
+function setProviderKey(app, providerId, apiKey, safeStorage = getElectronSafeStorage()) {
+  const config = loadConfig(app, { safeStorage });
+  const providerKeys = { ...config.providerKeys, [providerId]: encryptSecret(apiKey, safeStorage) };
+  const next = { ...config, providerKeys };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
+function getProviderKey(config, providerId, safeStorage = getElectronSafeStorage()) {
+  return decryptSecret(config?.providerKeys?.[providerId], safeStorage);
 }
 
 module.exports = {
   DEFAULT_CONFIG,
   configPath,
+  encryptSecret,
+  decryptSecret,
   loadConfig,
   writeConfig,
   launchEnvironment,
+  saveProviders,
+  saveProfiles,
+  setActiveProfile,
+  setProviderKey,
+  getProviderKey,
 };

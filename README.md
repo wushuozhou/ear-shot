@@ -98,3 +98,23 @@ API 密钥只保存在本机，不会显示在启动页面，也不会写进日�
 
 安装程序可以选择安装目录。额外的数据目录和模型目录可以在 `config.json` 中填写
 `dataDir` 和 `installDirHint`；留空时使用默认目录。
+
+## 模型供应商与第三方接入
+
+桌面版内置了 OpenAI、DeepSeek、硅基流动、OpenRouter、Groq、Ollama，
+以及 OpenAI Whisper、SenseVoice、CosyVoice、ElevenLabs 等常用服务。
+
+如果列表里没有你的服务，选择“自定义供应商”，填写名称、Base URL、API Key 和模型名称。
+只要服务兼容 OpenAI 接口，就不需要改代码：
+
+- DeepSeek：`https://api.deepseek.com/v1`，模型填 `deepseek-chat`
+- 硅基流动：`https://api.siliconflow.cn/v1`，模型可填 `deepseek-ai/DeepSeek-V3`
+- OpenRouter：`https://openrouter.ai/api/v1`，模型例如 `openai/gpt-4o-mini`
+- Ollama：`http://127.0.0.1:11434/v1`，模型填你本机已有的模型
+
+模型、STT 和 TTS 都可以单独添加自定义项目；STT 使用 `/audio/transcriptions`，
+TTS 使用 `/audio/speech`。保存后点击“测试连接”，失败时会告诉你是网络、密钥、
+地址、模型还是额度问题。API Key 会加密保存在本机，不会提交到仓库。
+
+一个 Profile 就是一组“模型 + 转文字 + 朗读声音”。你可以保存多组 Profile，
+在桌面版里一键切换，例如“国内推荐”和“声音最有感情”。切换后重新启动服务即可生效。
