@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Earshot</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">E</div>
+        <div>
+          <strong>Earshot</strong>
+          <span>听着呢</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <a href="#/providers" data-route="/providers"><span>◈</span>供应商</a>
+        <a href="#/call" data-route="/call"><span>◉</span>通话</a>
+        <a href="#/settings" data-route="/settings"><span>⚙</span>设置</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="profile-caption">当前 Profile</div>
+        <div id="sidebar-profile" class="sidebar-profile">未选择</div>
+        <div class="service-indicator"><i id="sidebar-dot"></i><span id="sidebar-status">启动中</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">Earshot</div>
+        <div class="topbar-actions">
+          <label class="profile-select">
+            <span>Profile</span>
+            <select id="profile-select" aria-label="切换 Profile"></select>
+          </label>
+          <span id="top-status" class="status-pill status-starting">启动中</span>
+          <button id="open-logs" class="button button-quiet" type="button">打开日志</button>
+        </div>
+      </header>
+      <div id="notice" class="notice hidden"></div>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -66,6 +66,24 @@ function publish(next) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:state', state);
 }
 
+function maskKey(value) {
+  const key = String(value || '');
+  if (!key) return '';
+  if (key.length <= 4) return '••••';
+  return `${key.slice(0, 3)}…${key.slice(-4)}`;
+}
+
+function safeProviderList() {
+  return config.providers.map(provider => ({
+    ...provider,
+    apiKey: undefined,
+    maskedKey: maskKey(getProviderKey(config, provider.id, safeStorage)),
+  })).map(provider => {
+    const { apiKey, ...safeProvider } = provider;
+    return safeProvider;
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -77,6 +95,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
@@ -227,7 +246,7 @@ async function startService({ resetRestarts = false } = {}) {
     publish({ status: 'ready', message: `服务已启动，正在打开 Earshot（端口 ${servicePort}）…` });
     writeLog(`服务探活成功：http://127.0.0.1:${servicePort}/api/info`);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      await mainWindow.loadURL(`http://127.0.0.1:${servicePort}`);
+      await mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
     }
   } catch (error) {
     writeLog(error.stack || error.message, 'startup-error');
@@ -246,10 +265,7 @@ function registerIpc() {
   ipcMain.handle('desktop:get-status', () => state);
   ipcMain.handle('desktop:open-logs-dir', () => shell.openPath(path.dirname(logFile)));
   ipcMain.handle('providers:list', () => ({
-    providers: config.providers.map(provider => {
-      const { apiKey, ...safeProvider } = provider;
-      return safeProvider;
-    }),
+    providers: safeProviderList(),
     profiles: config.profiles,
     activeProfileId: config.activeProfileId,
   }));
@@ -257,11 +273,16 @@ function registerIpc() {
     const value = input?.provider || input;
     if (!value || typeof value.id !== 'string' || typeof value.kind !== 'string') throw new Error('Provider 参数不完整');
     if (!['llm', 'stt', 'tts'].includes(value.kind)) throw new Error('Provider kind 无效');
+    const apiKey = typeof value.apiKey === 'string' ? value.apiKey : '';
+    const providerValue = { ...value };
+    delete providerValue.apiKey;
+    delete providerValue.maskedKey;
     const exists = config.providers.some(provider => provider.id === value.id);
     config = exists
-      ? saveProviders(app, updateProvider(config.providers, value.id, value), safeStorage)
-      : saveProviders(app, addProvider(config.providers, value), safeStorage);
-    return { providers: config.providers.map(({ apiKey, ...provider }) => provider) };
+      ? saveProviders(app, updateProvider(config.providers, value.id, providerValue), safeStorage)
+      : saveProviders(app, addProvider(config.providers, providerValue), safeStorage);
+    if (apiKey) config = setProviderKey(app, value.id, apiKey, safeStorage);
+    return { providers: safeProviderList() };
   });
   ipcMain.handle('providers:delete', (_event, id) => {
     if (typeof id !== 'string') throw new Error('Provider id 必须是字符串');
@@ -270,7 +291,7 @@ function registerIpc() {
     delete providerKeys[id];
     writeConfig(app, { ...config, providers, providerKeys }, safeStorage);
     config = loadConfig(app, { safeStorage });
-    return { providers: config.providers.map(({ apiKey, ...provider }) => provider) };
+    return { providers: safeProviderList() };
   });
   ipcMain.handle('providers:set-key', (_event, input) => {
     if (!input || typeof input.id !== 'string' || typeof input.key !== 'string') throw new Error('Provider 密钥参数无效');
@@ -301,6 +322,27 @@ function registerIpc() {
     if (typeof id !== 'string') throw new Error('Profile id 必须是字符串');
     config = setActiveProfile(app, id, safeStorage);
     return { profiles: config.profiles, activeProfileId: config.activeProfileId };
+  });
+  ipcMain.handle('app:get-meta', () => ({
+    port: servicePort,
+    configPath: configPath(app),
+    logPath: logFile,
+    dataDir: config.dataDir,
+    serviceStatus: state.status,
+    activeProfileId: config.activeProfileId,
+    storage: safeStorage.isEncryptionAvailable() ? 'safeStorage 加密' : '明文（系统不支持安全存储）',
+  }));
+  ipcMain.handle('app:restart-service', () => startService({ resetRestarts: true }));
+  ipcMain.handle('app:open-path', (_event, target) => {
+    if (target === 'config') return shell.openPath(path.dirname(configPath(app)));
+    if (target === 'logs') return shell.openPath(path.dirname(logFile));
+    throw new Error('只能打开配置目录或日志目录');
+  });
+  ipcMain.handle('app:set-data-dir', (_event, dataDir) => {
+    if (typeof dataDir !== 'string' || dataDir.length > 2000) throw new Error('数据目录路径无效');
+    config = { ...config, dataDir: dataDir.trim() };
+    writeConfig(app, config, safeStorage);
+    return { dataDir: config.dataDir };
   });
 }
 

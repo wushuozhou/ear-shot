@@ -33,6 +33,18 @@ contextBridge.exposeInMainWorld('desktop', {
       return ipcRenderer.invoke('profiles:set-active', id);
     },
   },
+  app: {
+    getMeta: () => ipcRenderer.invoke('app:get-meta'),
+    restartService: () => ipcRenderer.invoke('app:restart-service'),
+    openPath: target => {
+      if (target !== 'config' && target !== 'logs') throw new TypeError('只能打开配置目录或日志目录');
+      return ipcRenderer.invoke('app:open-path', target);
+    },
+    setDataDir: dataDir => {
+      if (typeof dataDir !== 'string') throw new TypeError('数据目录必须是字符串');
+      return ipcRenderer.invoke('app:set-data-dir', dataDir);
+    },
+  },
   onState: callback => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('desktop:state', listener);
