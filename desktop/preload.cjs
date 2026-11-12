@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('desktop', {
       if (!['llm', 'stt', 'tts'].includes(value.kind)) throw new TypeError('Provider kind 无效');
       return ipcRenderer.invoke('providers:save', provider);
     },
+    onboarding: {
+      setDismissed: dismissed => {
+        if (typeof dismissed !== 'boolean') throw new TypeError('向导状态必须是布尔值');
+        return ipcRenderer.invoke('onboarding:set-dismissed', dismissed);
+      },
+    },
     delete: id => {
       if (typeof id !== 'string') throw new TypeError('Provider id 必须是字符串');
       return ipcRenderer.invoke('providers:delete', id);

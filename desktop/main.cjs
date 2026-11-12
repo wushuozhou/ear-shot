@@ -15,6 +15,7 @@ const {
   setActiveProfile,
   setActiveTone,
   setMemoryConfig,
+  setOnboardingDismissed,
   setProviderKey,
   writeConfig,
 } = require('./config.cjs');
@@ -358,6 +359,7 @@ function registerIpc() {
     providers: safeProviderList(),
     profiles: config.profiles,
     activeProfileId: config.activeProfileId,
+    onboardingDismissed: config.onboardingDismissed,
   }));
   ipcMain.handle('providers:save', (_event, input) => {
     const value = input?.provider || input;
@@ -394,9 +396,15 @@ function registerIpc() {
     if (!provider) throw new Error(`找不到 Provider：${id}`);
     return testProvider({ ...provider, apiKey: getProviderKey(config, id, safeStorage) });
   });
+  ipcMain.handle('onboarding:set-dismissed', (_event, dismissed) => {
+    if (typeof dismissed !== 'boolean') throw new Error('向导状态无效');
+    config = setOnboardingDismissed(app, dismissed, safeStorage);
+    return { onboardingDismissed: config.onboardingDismissed };
+  });
   ipcMain.handle('profiles:list', () => ({
     profiles: config.profiles,
     activeProfileId: config.activeProfileId,
+    onboardingDismissed: config.onboardingDismissed,
   }));
   ipcMain.handle('profiles:save', (_event, input) => {
     const value = input?.profile || input;

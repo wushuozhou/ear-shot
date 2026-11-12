@@ -2,6 +2,9 @@ const state = {
   providers: [],
   profiles: [],
   activeProfileId: '',
+  onboardingDismissed: false,
+  testedProviders: new Set(),
+  initialRouteHandled: false,
   meta: null,
   service: { status: 'starting', message: '正在启动服务…' },
   conversations: [],
@@ -22,10 +25,120 @@ function escapeText(value) {
   return String(value ?? '');
 }
 
+function activeProfileProviders() {
+  const profile = currentProfile();
+  return [profile?.llmId, profile?.sttId, profile?.ttsId]
+    .map(id => state.providers.find(provider => provider.id === id))
+    .filter(Boolean);
+}
+
+function missingProfileProviders() {
+  return activeProfileProviders().filter(provider => !provider.maskedKey);
+}
+
+function onboardingNeeded() {
+  return missingProfileProviders().length > 0;
+}
+
+function onboardingComplete() {
+  const providers = activeProfileProviders();
+  return providers.length === 3
+    && providers.every(provider => provider.maskedKey && state.testedProviders.has(provider.id));
+}
+
+function focusProviderCard(provider) {
+  const target = document.getElementById(`provider-card-${provider.id}`);
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target?.classList.add('provider-highlight');
+  setTimeout(() => target?.classList.remove('provider-highlight'), 2000);
+  openProviderForm(provider);
+}
+
 function statusLabel(status) {
   if (status === 'ready') return '运行中';
   if (status === 'failed') return '已停止';
   return '启动中';
+}
+
+function renderOnboardingCard() {
+  const card = document.createElement('section');
+  card.className = 'onboarding-card';
+  const title = document.createElement('h2');
+  title.textContent = '三步就能用';
+  const intro = document.createElement('p');
+  intro.textContent = '选一个适合你的套餐，填好 Key，再测试连接。';
+  card.append(title, intro);
+
+  const stepOne = document.createElement('div');
+  stepOne.className = 'onboarding-step';
+  stepOne.innerHTML = '<strong>第 1 步：选一个套餐</strong>';
+  const profiles = document.createElement('div');
+  profiles.className = 'onboarding-profiles';
+  [
+    ['builtin-profile-openai', '一把钥匙全用 OpenAI'],
+    ['builtin-profile-china', '国内推荐 DeepSeek+硅基流动'],
+    ['builtin-profile-expressive', '声音最有感情 OpenAI+ElevenLabs'],
+  ].forEach(([id, label]) => {
+    const item = button(label, `onboarding-profile${id === state.activeProfileId ? ' selected' : ''}`);
+    item.addEventListener('click', async () => {
+      try {
+        await window.desktop.profiles.setActive(id);
+        state.testedProviders.clear();
+        await window.desktop.app.restartService();
+        await refresh();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    profiles.append(item);
+  });
+  stepOne.append(profiles);
+  card.append(stepOne);
+
+  const stepTwo = document.createElement('div');
+  stepTwo.className = 'onboarding-step';
+  stepTwo.innerHTML = '<strong>第 2 步：给还缺 Key 的供应商填 Key</strong>';
+  const missing = missingProfileProviders();
+  if (missing.length) {
+    const missingList = document.createElement('div');
+    missingList.className = 'onboarding-missing';
+    missing.forEach(provider => {
+      const item = document.createElement('div');
+      item.className = 'onboarding-missing-item';
+      item.textContent = provider.name;
+      const fill = button('去填 Key', 'button button-quiet button-small');
+      fill.addEventListener('click', () => focusProviderCard(provider));
+      item.append(fill);
+      missingList.append(item);
+    });
+    stepTwo.append(missingList);
+  } else {
+    stepTwo.append(document.createTextNode('三个供应商都已填写 Key。'));
+  }
+  card.append(stepTwo);
+
+  const stepThree = document.createElement('div');
+  stepThree.className = 'onboarding-step';
+  stepThree.innerHTML = '<strong>第 3 步：逐个点「测试连接」，全都绿了就能用</strong>';
+  card.append(stepThree);
+  const footer = document.createElement('div');
+  footer.className = 'onboarding-footer';
+  footer.textContent = 'Key 只存在你这台电脑上，不会上传';
+  if (onboardingComplete()) {
+    const close = button('关闭向导', 'button button-quiet button-small');
+    close.addEventListener('click', async () => {
+      try {
+        await window.desktop.onboarding.setDismissed(true);
+        state.onboardingDismissed = true;
+        renderProviders();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    footer.append(close);
+  }
+  card.append(footer);
+  content.append(card);
 }
 
 function currentProfile() {
@@ -105,6 +218,7 @@ function button(text, className = 'button button-quiet') {
 function providerCard(provider) {
   const card = document.createElement('article');
   card.className = 'provider-card';
+  card.id = `provider-card-${provider.id}`;
   const head = document.createElement('div');
   head.className = 'provider-card-head';
   const title = document.createElement('div');
@@ -169,8 +283,10 @@ function providerCard(provider) {
     result.className = 'test-result';
     try {
       const response = await window.desktop.providers.test(provider.id);
+      if (response.ok) state.testedProviders.add(provider.id);
       result.textContent = response.ok ? `成功，延迟 ${response.latencyMs} ms` : `失败：${response.message}`;
       result.className = `test-result ${response.ok ? 'ok' : 'fail'}`;
+      if (response.ok) renderProviders();
     } catch (error) {
       result.textContent = `失败：${error.message}`;
       result.className = 'test-result fail';
@@ -180,6 +296,11 @@ function providerCard(provider) {
     }
   });
   actions.append(edit, test);
+  if (onboardingNeeded() && !provider.maskedKey) {
+    const fill = button('去填 Key', 'button button-small');
+    fill.addEventListener('click', () => focusProviderCard(provider));
+    actions.append(fill);
+  }
   if (!provider.builtin) {
     const remove = button('删除', 'button button-danger button-small');
     remove.addEventListener('click', async () => {
@@ -205,6 +326,13 @@ function renderConversationMessages() {
   if (!stream) return;
   stream.replaceChildren();
   const messages = state.currentConversation?.messages || [];
+  if (onboardingNeeded()) {
+    const empty = document.createElement('div');
+    empty.className = 'message-empty';
+    empty.innerHTML = '<div><strong>先完成首次设置</strong>请先到「供应商」页选择套餐、填写 Key 并测试连接，完成后就可以开始聊天。</div>';
+    stream.append(empty);
+    return;
+  }
   if (!messages.length && !state.streamingText) {
     const empty = document.createElement('div');
     empty.className = 'message-empty';
@@ -387,7 +515,7 @@ function renderConversation() {
   form.className = 'message-form';
   const input = document.createElement('textarea');
   input.placeholder = '输入消息，按 Ctrl+Enter 发送';
-  input.disabled = state.agentBusy;
+  input.disabled = state.agentBusy || onboardingNeeded();
   input.addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -395,7 +523,7 @@ function renderConversation() {
     }
   });
   const send = button(state.agentBusy ? '生成中…' : '发送', 'button');
-  send.disabled = state.agentBusy;
+  send.disabled = state.agentBusy || onboardingNeeded();
   form.append(input, send);
   if (state.agentBusy) {
     const stop = button('停止', 'button stop-button');
@@ -491,6 +619,9 @@ function renderProviders() {
   add.addEventListener('click', () => openProviderForm());
   heading.append(add);
   content.append(heading);
+  if (!state.onboardingDismissed && onboardingNeeded()) {
+    renderOnboardingCard();
+  }
   const groups = [
     ['llm', '大模型', '负责理解和生成回答'],
     ['stt', '转文字', '把你说的话变成文字'],
@@ -835,6 +966,7 @@ function openProviderForm(existing) {
       extraHeaders,
     };
     if (String(values.apiKey).trim()) value.apiKey = String(values.apiKey).trim();
+    if (value.apiKey) state.testedProviders.delete(value.id);
     save.disabled = true;
     try {
       await window.desktop.providers.save(value);
@@ -856,6 +988,11 @@ async function refresh() {
   state.providers = providerData.providers || [];
   state.profiles = providerData.profiles || [];
   state.activeProfileId = providerData.activeProfileId || '';
+  state.onboardingDismissed = providerData.onboardingDismissed === true;
+  if (!state.initialRouteHandled) {
+    state.initialRouteHandled = true;
+    if (!state.onboardingDismissed && onboardingNeeded()) location.hash = '#/providers';
+  }
   state.meta = meta;
   state.service = service;
   renderTop();

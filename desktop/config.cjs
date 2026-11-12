@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = {
   memoryEnabled: false,
   providerKeys: {},
   envSecrets: {},
+  onboardingDismissed: false,
 };
 
 function configPath(app) {
@@ -104,6 +105,7 @@ function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
       profiles,
       activeProfileId,
       providerKeys,
+      onboardingDismissed: source.onboardingDismissed === true,
     };
   }
 
@@ -117,6 +119,7 @@ function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
     profiles,
     activeProfileId,
     providerKeys,
+    onboardingDismissed: source.onboardingDismissed === true,
   };
 }
 
@@ -226,6 +229,13 @@ function setProviderKey(app, providerId, apiKey, safeStorage = getElectronSafeSt
   return mergeConfig(next, safeStorage);
 }
 
+function setOnboardingDismissed(app, dismissed, safeStorage = getElectronSafeStorage()) {
+  const config = loadConfig(app, { safeStorage });
+  const next = { ...config, onboardingDismissed: dismissed === true };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
 function getProviderKey(config, providerId, safeStorage = getElectronSafeStorage()) {
   return decryptSecret(config?.providerKeys?.[providerId], safeStorage);
 }
@@ -244,5 +254,6 @@ module.exports = {
   setActiveTone,
   setMemoryConfig,
   setProviderKey,
+  setOnboardingDismissed,
   getProviderKey,
 };
