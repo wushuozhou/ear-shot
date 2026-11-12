@@ -48,6 +48,43 @@ jobs:
         working-directory: desktop
         run: npm run dist
 
+      - name: 冒烟测试：产物能否启动
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "desktop\dist\win-unpacked\Earshot.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "找不到未打包应用：$exe"
+            exit 1
+          }
+
+          $versionOutput = & $exe --version 2>&1
+          $versionExitCode = $LASTEXITCODE
+          Write-Host "--version 输出：$versionOutput"
+          Write-Host "--version 退出码：$versionExitCode"
+          if ($versionExitCode -ne 0 -or ($versionOutput -notmatch '\bv\d+\.\d+\.\d+\b')) {
+            Write-Host "stderr 输出："
+            & $exe --version 2>&1
+            exit 1
+          }
+
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 25
+          if (-not $process.HasExited) {
+            Write-Host "完整应用在等待期内仍在运行，冒烟测试通过。"
+            & taskkill.exe /PID $process.Id /T /F
+            exit 0
+          }
+
+          Write-Host "完整应用已退出，退出码：$($process.ExitCode)"
+          $logPath = Join-Path $env:APPDATA "earshot-desktop\logs\desktop.log"
+          Write-Host "日志路径：$logPath"
+          if (Test-Path $logPath) {
+            Get-Content -Path $logPath
+          } else {
+            Write-Host "日志文件不存在。"
+          }
+          exit 1
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
