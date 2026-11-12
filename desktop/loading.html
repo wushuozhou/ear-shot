@@ -72,7 +72,7 @@
       window.desktop.retry().finally(() => { retry.disabled = false; });
     });
 
-    window.desktop.getState().then(render).catch(error => {
+    window.desktop.getStatus().then(render).catch(error => {
       render({ status: 'failed', message: `启动页面无法读取状态：${error.message}` });
     });
     window.desktop.onState(render);

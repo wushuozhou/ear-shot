@@ -214,8 +214,8 @@ async function stopService() {
 
 function registerIpc() {
   ipcMain.handle('desktop:retry', () => startService({ resetRestarts: true }));
-  ipcMain.handle('desktop:get-state', () => state);
-  ipcMain.handle('desktop:open-logs', () => shell.openPath(path.dirname(logFile)));
+  ipcMain.handle('desktop:get-status', () => state);
+  ipcMain.handle('desktop:open-logs-dir', () => shell.openPath(path.dirname(logFile)));
 }
 
 async function bootstrap() {

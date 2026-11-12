@@ -67,6 +67,9 @@ function readDotEnv(file) {
 }
 
 function launchEnvironment(app, config, rootDir, port) {
+  // Priority is config.json first, then the root .env file, then inherited process
+  // variables for unrelated runtime settings. Secrets stay in the main process and
+  // are passed only to the child service; they are never returned to the renderer.
   const dotenv = readDotEnv(path.join(rootDir, '.env'));
   return {
     ...process.env,
