@@ -98,6 +98,7 @@ API 密钥只保存在本机，不会显示在启动页面，也不会写进日�
 
 安装程序可以选择安装目录。额外的数据目录和模型目录可以在 `config.json` 中填写
 `dataDir` 和 `installDirHint`；留空时使用默认目录。
+发版时运行 `npm run release <版本号>`，然后手动执行脚本打印的 git commit、tag 和 push 命令。
 
 ## 模型供应商与第三方接入
 
