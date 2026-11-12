@@ -1,0 +1,17 @@
+{
+  "name": "earshot",
+  "version": "0.1.0",
+  "description": "A voice call with an AI that actually listens: hears you while you talk, waits while you think, stops when you cut in.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "earshot": "node cli.cjs",
+    "test": "node --test tests/*.test.*",
+    "check": "node tools/check.cjs",
+    "setup": "node tools/setup.cjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {}
+}
