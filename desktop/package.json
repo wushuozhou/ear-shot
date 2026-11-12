@@ -1,0 +1,30 @@
+{
+  "name": "earshot-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for Earshot",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.wushuozhou.earshot",
+    "productName": "Earshot",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "../server/**/*",
+      "../web/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "electron": "^36.0.0",
+    "electron-builder": "^26.0.12"
+  }
+}

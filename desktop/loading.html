@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Earshot 正在启动</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      background: #111827;
+      color: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #1f2937, #111827 62%);
+    }
+    main { width: min(680px, calc(100vw - 48px)); }
+    h1 { margin: 0 0 12px; font-size: 30px; font-weight: 600; }
+    p { color: #9ca3af; line-height: 1.7; }
+    .card {
+      padding: 32px;
+      border: 1px solid #374151;
+      border-radius: 16px;
+      background: rgba(17, 24, 39, .86);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, .28);
+    }
+    .status { min-height: 56px; white-space: pre-wrap; }
+    .error { color: #fca5a5; }
+    button {
+      display: none;
+      padding: 10px 18px;
+      border: 0;
+      border-radius: 8px;
+      color: #111827;
+      background: #93c5fd;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    button:hover { background: #bfdbfe; }
+    .meta { margin-top: 28px; font-size: 12px; color: #6b7280; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Earshot</h1>
+      <p id="status" class="status">正在启动服务…</p>
+      <button id="retry" type="button">重试</button>
+      <div id="logs" class="meta"></div>
+    </section>
+  </main>
+  <script>
+    const status = document.getElementById('status');
+    const retry = document.getElementById('retry');
+    const logs = document.getElementById('logs');
+
+    function render(state) {
+      status.textContent = state.message || '正在启动服务…';
+      status.className = state.status === 'failed' ? 'status error' : 'status';
+      retry.style.display = state.status === 'failed' ? 'inline-block' : 'none';
+      logs.textContent = state.logPath ? `日志位置：${state.logPath}` : '';
+    }
+
+    retry.addEventListener('click', () => {
+      retry.disabled = true;
+      render({ status: 'starting', message: '正在重试启动服务…', logPath: logs.textContent.replace('日志位置：', '') });
+      window.desktop.retry().finally(() => { retry.disabled = false; });
+    });
+
+    window.desktop.getState().then(render).catch(error => {
+      render({ status: 'failed', message: `启动页面无法读取状态：${error.message}` });
+    });
+    window.desktop.onState(render);
+  </script>
+</body>
+</html>
