@@ -42,6 +42,7 @@ const {
 const DEFAULT_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
+const selfTestMode = process.argv.includes('--self-test');
 const rootDir = app.isPackaged
   ? path.join(process.resourcesPath, 'earshot')
   : path.resolve(__dirname, '..');
@@ -339,9 +340,21 @@ async function startService({ resetRestarts = false } = {}) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       await mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
     }
+    if (selfTestMode) {
+      console.log(`SELF_TEST_OK port=${servicePort}`);
+      setTimeout(() => {
+        process.exitCode = 0;
+        app.quit();
+      }, 3000);
+    }
   } catch (error) {
     writeLog(error.stack || error.message, 'startup-error');
     publish({ status: 'failed', message: `启动失败：${error.message}` });
+    if (selfTestMode) {
+      console.error(`SELF_TEST_FAIL ${error.message}`);
+      process.exitCode = 1;
+      app.quit();
+    }
   }
 }
 
