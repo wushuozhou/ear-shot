@@ -9,6 +9,7 @@ const {
   buildSystemPrompt,
   createSseParser,
   recallMemories,
+  storeMemory,
 } = require('./agent.cjs');
 
 test('SSE parser handles split chunks, multiple events, and DONE', () => {
@@ -63,4 +64,53 @@ test('disabled memory performs no requests', async () => {
   });
   assert.deepEqual(memories, []);
   assert.equal(calls, 0);
+});
+
+test('memory recall uses GET query parameters and normalizes base URLs and response shapes', async () => {
+  const cases = [
+    { baseUrl: 'http://127.0.0.1:8765/', response: ['direct text'] },
+    { baseUrl: 'http://127.0.0.1:8765/api', response: { items: [{ text: 'item text' }] } },
+    { baseUrl: 'http://127.0.0.1:8765/api/', response: { results: [{ content: 'result text' }] } },
+  ];
+  for (const item of cases) {
+    let request;
+    const memories = await recallMemories({
+      memoryBaseUrl: item.baseUrl,
+      memoryEnabled: true,
+      query: '下雨天喝什么',
+      fetchImpl: async (url, options) => {
+        request = { url: String(url), options };
+        return { ok: true, json: async () => item.response };
+      },
+    });
+    const parsed = new URL(request.url);
+    assert.equal(parsed.pathname, '/api/recall');
+    assert.equal(request.options.method, 'GET');
+    assert.equal(request.options.body, undefined);
+    assert.equal(parsed.searchParams.get('query'), '下雨天喝什么');
+    assert.equal(parsed.searchParams.get('budget'), '3');
+    assert.equal(parsed.searchParams.get('policy'), 'conversation');
+    assert.deepEqual(memories.map(memory => typeof memory === 'string' ? memory : memory.text), [
+      typeof item.response === 'object' && !Array.isArray(item.response)
+        ? (item.response.items?.[0]?.text || item.response.results?.[0]?.content)
+        : item.response[0],
+    ]);
+  }
+});
+
+test('memory store remains POST with text and tag body', async () => {
+  let request;
+  const ok = await storeMemory({
+    memoryBaseUrl: 'http://127.0.0.1:8765/',
+    memoryEnabled: true,
+    text: '本轮摘要',
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), options };
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  assert.equal(ok, true);
+  assert.equal(request.url, 'http://127.0.0.1:8765/api/store');
+  assert.equal(request.options.method, 'POST');
+  assert.deepEqual(JSON.parse(request.options.body), { text: '本轮摘要', tag: 'conversation' });
 });

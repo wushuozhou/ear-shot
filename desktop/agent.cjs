@@ -7,6 +7,28 @@ function trimBaseUrl(value) {
   return String(value || '').replace(/\/+$/, '');
 }
 
+function memoryEndpoint(baseUrl, endpoint) {
+  const base = trimBaseUrl(baseUrl);
+  const apiBase = /\/api$/i.test(base) ? base : `${base}/api`;
+  return `${apiBase}/${endpoint}`;
+}
+
+function memoryItems(result) {
+  const items = Array.isArray(result)
+    ? result
+    : Array.isArray(result?.items)
+      ? result.items
+      : Array.isArray(result?.results)
+        ? result.results
+        : [];
+  return items.map(item => {
+    if (typeof item === 'string') return item;
+    if (!item || typeof item !== 'object') return '';
+    const text = item.text ?? item.content ?? item.memory ?? '';
+    return text ? { ...item, text: String(text) } : '';
+  }).filter(Boolean);
+}
+
 function buildSystemPrompt({ persona, tone, memories }) {
   const tonePrompt = tone?.systemPrompt || '使用自然、清楚、尊重对方的中文回答。';
   const memoryLines = Array.isArray(memories) && memories.length
@@ -154,11 +176,15 @@ async function requestJson(url, options = {}, fetchImpl = globalThis.fetch) {
 async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3, fetchImpl = globalThis.fetch }) {
   if (!memoryEnabled || !String(memoryBaseUrl || '').trim()) return [];
   try {
-    const result = await requestJson(`${trimBaseUrl(memoryBaseUrl)}/api/recall`, {
-      method: 'POST',
-      body: JSON.stringify({ query: String(query || ''), budget, policy: 'conversation' }),
+    const params = new URLSearchParams({
+      query: String(query || ''),
+      budget: String(budget),
+      policy: 'conversation',
+    });
+    const result = await requestJson(`${memoryEndpoint(memoryBaseUrl, 'recall')}?${params}`, {
+      method: 'GET',
     }, fetchImpl);
-    return Array.isArray(result?.results) ? result.results : [];
+    return memoryItems(result);
   } catch (_) {
     return [];
   }
@@ -167,7 +193,7 @@ async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3,
 async function storeMemory({ memoryBaseUrl, memoryEnabled, text, fetchImpl = globalThis.fetch }) {
   if (!memoryEnabled || !String(memoryBaseUrl || '').trim()) return false;
   try {
-    await requestJson(`${trimBaseUrl(memoryBaseUrl)}/api/store`, {
+    await requestJson(memoryEndpoint(memoryBaseUrl, 'store'), {
       method: 'POST',
       body: JSON.stringify({ text: String(text || ''), tag: 'conversation' }),
     }, fetchImpl);
@@ -180,12 +206,12 @@ async function storeMemory({ memoryBaseUrl, memoryEnabled, text, fetchImpl = glo
 async function testMemoryConnection({ memoryBaseUrl, fetchImpl = globalThis.fetch }) {
   if (!String(memoryBaseUrl || '').trim()) return { ok: false, message: '请先填写记忆服务地址' };
   try {
-    const result = await requestJson(`${trimBaseUrl(memoryBaseUrl)}/api/recall`, {
-      method: 'POST',
-      body: JSON.stringify({ query: '测试', budget: 1, policy: 'conversation' }),
+    const params = new URLSearchParams({ query: '测试', budget: '1', policy: 'conversation' });
+    const result = await requestJson(`${memoryEndpoint(memoryBaseUrl, 'recall')}?${params}`, {
+      method: 'GET',
       signal: AbortSignal.timeout(3000),
     }, fetchImpl);
-    const count = Array.isArray(result?.results) ? result.results.length : 0;
+    const count = memoryItems(result).length;
     return { ok: true, message: `连接成功，返回 ${count} 条记忆` };
   } catch (error) {
     return { ok: false, message: classifyNetworkError(error) };

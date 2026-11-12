@@ -126,3 +126,11 @@ TTS 使用 `/audio/speech`。保存后点击“测试连接”，失败时会告
 
 记忆服务是可选的：在“设置”里打开开关并填写 Tidemark 地址（默认 `http://127.0.0.1:8765`）。
 开启后，聊天前会尝试召回相关记忆，聊天后会保存本轮摘要；记忆服务没启动时不会打断聊天。
+召回使用 `GET /api/recall`，例如：
+
+```bash
+curl -G 'http://127.0.0.1:8765/api/recall' \
+  --data-urlencode 'query=下雨天喝什么' \
+  --data-urlencode 'budget=3' \
+  --data-urlencode 'policy=conversation'
+```
