@@ -29,7 +29,9 @@ const { testProvider } = require('./provider-test.cjs');
 const DEFAULT_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
-const rootDir = path.resolve(__dirname, '..');
+const rootDir = app.isPackaged
+  ? path.join(process.resourcesPath, 'earshot')
+  : path.resolve(__dirname, '..');
 const serverScript = path.join(rootDir, 'server', 'index.js');
 
 let mainWindow;
@@ -209,6 +211,9 @@ async function startService({ resetRestarts = false } = {}) {
   writeLog(`开始启动服务，配置文件：${configPath(app)}`);
 
   try {
+    if (!fs.existsSync(serverScript)) {
+      throw new Error('找不到内置服务文件，安装可能不完整，请重新安装');
+    }
     servicePort = await findAvailablePort(Number(config.port) || DEFAULT_PORT);
     const activeProfile = config.profiles.find(item => item.id === config.activeProfileId);
     const runtimeProviders = config.providers.map(provider => ({

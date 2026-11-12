@@ -15,12 +15,47 @@
       "output": "dist"
     },
     "files": [
-      "**/*",
-      "../server/**/*",
-      "../web/**/*"
+      "main.cjs",
+      "preload.cjs",
+      "config.cjs",
+      "providers.cjs",
+      "provider-test.cjs",
+      "loading.html",
+      "app/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "earshot/server"
+      },
+      {
+        "from": "../web",
+        "to": "earshot/web"
+      },
+      {
+        "from": "../persona.example.md",
+        "to": "earshot/persona.example.md"
+      },
+      {
+        "from": "../persona.example.zh.md",
+        "to": "earshot/persona.example.zh.md"
+      },
+      {
+        "from": "../package.json",
+        "to": "earshot/package.json"
+      }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "Earshot-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "oneClick": false,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Earshot 听着呢"
     }
   },
   "devDependencies": {
