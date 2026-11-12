@@ -13,6 +13,8 @@ const {
   saveProfiles,
   saveProviders,
   setActiveProfile,
+  setActiveTone,
+  setMemoryConfig,
   setProviderKey,
   writeConfig,
 } = require('./config.cjs');
@@ -25,6 +27,16 @@ const {
   updateProvider,
 } = require('./providers.cjs');
 const { testProvider } = require('./provider-test.cjs');
+const {
+  ConversationStore,
+  buildSystemPrompt,
+  loadPersona,
+  readTones,
+  recallMemories,
+  storeMemory,
+  streamChat,
+  testMemoryConnection,
+} = require('./agent.cjs');
 
 const DEFAULT_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -50,6 +62,9 @@ let state = {
 };
 let config;
 let logFile;
+let conversationStore;
+let toneOptions = [];
+const agentTickets = new Map();
 
 function redact(value) {
   return String(value)
@@ -84,6 +99,76 @@ function safeProviderList() {
     const { apiKey, ...safeProvider } = provider;
     return safeProvider;
   });
+}
+
+function agentEvent(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', payload);
+}
+
+function activeLlmProvider() {
+  const profile = config.profiles.find(item => item.id === config.activeProfileId);
+  const provider = config.providers.find(item => item.id === profile?.llmId);
+  if (!provider) throw new Error('当前 Profile 没有可用的大模型 Provider');
+  return {
+    ...provider,
+    apiKey: getProviderKey(config, provider.id, safeStorage),
+  };
+}
+
+function startAgentChat(conversationId, userText) {
+  const ticketId = `ticket-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const controller = new AbortController();
+  agentTickets.set(ticketId, { controller, conversationId });
+  (async () => {
+    let assistantText = '';
+    let failed = false;
+    try {
+      const conversation = conversationStore.append(conversationId, { role: 'user', content: userText });
+      agentEvent({ type: 'started', conversationId, ticketId, message: userText });
+      const tone = toneOptions.find(item => item.id === config.activeToneId) || toneOptions[0];
+      const memories = await recallMemories({
+        memoryBaseUrl: config.memoryBaseUrl,
+        memoryEnabled: config.memoryEnabled,
+        query: userText,
+      });
+      const messages = [
+        { role: 'system', content: buildSystemPrompt({ persona: loadPersona(rootDir), tone, memories }) },
+        ...conversation.messages,
+      ];
+      const completed = await streamChat({
+        provider: activeLlmProvider(),
+        messages,
+        signal: controller.signal,
+        onDelta: delta => {
+          assistantText += delta;
+          agentEvent({ type: 'delta', conversationId, ticketId, delta });
+        },
+        onDone: () => {},
+        onError: message => {
+          failed = true;
+          agentEvent({ type: 'error', conversationId, ticketId, message });
+        },
+      });
+      if (completed && !failed && !assistantText) {
+        agentEvent({ type: 'error', conversationId, ticketId, message: '响应格式异常：模型没有返回文字' });
+        return;
+      }
+      if (completed && !failed && assistantText) {
+        conversationStore.append(conversationId, { role: 'assistant', content: assistantText });
+        await storeMemory({
+          memoryBaseUrl: config.memoryBaseUrl,
+          memoryEnabled: config.memoryEnabled,
+          text: `用户：${userText}\n助手：${assistantText}`,
+        });
+        agentEvent({ type: 'done', conversationId, ticketId, content: assistantText });
+      }
+    } catch (error) {
+      agentEvent({ type: 'error', conversationId, ticketId, message: error.message || '对话请求失败' });
+    } finally {
+      agentTickets.delete(ticketId);
+    }
+  })();
+  return ticketId;
 }
 
 function createWindow() {
@@ -349,6 +434,57 @@ function registerIpc() {
     writeConfig(app, config, safeStorage);
     return { dataDir: config.dataDir };
   });
+  ipcMain.handle('agent:tones', () => ({ tones: toneOptions, activeToneId: config.activeToneId }));
+  ipcMain.handle('agent:tone-set', (_event, id) => {
+    if (typeof id !== 'string' || !toneOptions.some(item => item.id === id)) throw new Error('语气 id 无效');
+    config = setActiveTone(app, id, safeStorage);
+    return { activeToneId: config.activeToneId };
+  });
+  ipcMain.handle('agent:chat-start', (_event, input) => {
+    if (!input || typeof input.conversationId !== 'string' || typeof input.text !== 'string') {
+      throw new Error('对话参数无效');
+    }
+    const text = input.text.trim();
+    if (!text) throw new Error('消息不能为空');
+    if (!conversationStore) throw new Error('会话存储尚未准备好');
+    return { ticketId: startAgentChat(input.conversationId, text) };
+  });
+  ipcMain.handle('agent:chat-abort', (_event, ticketId) => {
+    if (typeof ticketId !== 'string') throw new Error('ticket id 无效');
+    agentTickets.get(ticketId)?.controller.abort();
+    return { ok: true };
+  });
+  ipcMain.handle('agent:conversation-list', () => conversationStore.list());
+  ipcMain.handle('agent:conversation-load', (_event, id) => conversationStore.load(id));
+  ipcMain.handle('agent:conversation-new', (_event, title) => conversationStore.create(typeof title === 'string' ? title : '新对话'));
+  ipcMain.handle('agent:conversation-delete', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('会话 id 无效');
+    conversationStore.delete(id);
+    return { ok: true };
+  });
+  ipcMain.handle('agent:conversation-rename', (_event, input) => {
+    if (!input || typeof input.id !== 'string' || typeof input.title !== 'string') throw new Error('重命名参数无效');
+    return conversationStore.rename(input.id, input.title);
+  });
+  ipcMain.handle('agent:memory-get', () => ({
+    memoryBaseUrl: config.memoryBaseUrl,
+    memoryEnabled: config.memoryEnabled,
+  }));
+  ipcMain.handle('agent:memory-set', (_event, input) => {
+    if (!input || typeof input.memoryBaseUrl !== 'string' || typeof input.memoryEnabled !== 'boolean') {
+      throw new Error('记忆配置无效');
+    }
+    if (input.memoryBaseUrl && !/^https?:\/\//i.test(input.memoryBaseUrl)) throw new Error('记忆服务地址必须以 http:// 或 https:// 开头');
+    config = setMemoryConfig(app, {
+      memoryBaseUrl: input.memoryBaseUrl.trim(),
+      memoryEnabled: input.memoryEnabled,
+    }, safeStorage);
+    return { memoryBaseUrl: config.memoryBaseUrl, memoryEnabled: config.memoryEnabled };
+  });
+  ipcMain.handle('agent:memory-test', async (_event, baseUrl) => {
+    if (typeof baseUrl !== 'string') throw new Error('记忆服务地址无效');
+    return testMemoryConnection({ memoryBaseUrl: baseUrl });
+  });
 }
 
 async function bootstrap() {
@@ -359,6 +495,8 @@ async function bootstrap() {
 
   try {
     config = loadConfig(app, { safeStorage });
+    toneOptions = readTones();
+    conversationStore = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
   } catch (error) {
     publish({ status: 'failed', message: error.message });
   }

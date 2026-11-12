@@ -20,8 +20,10 @@
       "config.cjs",
       "providers.cjs",
       "provider-test.cjs",
+      "agent.cjs",
       "loading.html",
-      "app/**/*"
+      "app/**/*",
+      "skills/**/*"
     ],
     "extraResources": [
       {

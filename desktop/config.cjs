@@ -15,6 +15,9 @@ const DEFAULT_CONFIG = {
   providers: [],
   profiles: [],
   activeProfileId: '',
+  activeToneId: 'gentle-companion',
+  memoryBaseUrl: '',
+  memoryEnabled: false,
   providerKeys: {},
   envSecrets: {},
 };
@@ -197,6 +200,24 @@ function setActiveProfile(app, activeProfileId, safeStorage) {
   return mergeConfig(next, safeStorage);
 }
 
+function setActiveTone(app, activeToneId, safeStorage) {
+  const config = loadConfig(app, { safeStorage });
+  const next = { ...config, activeToneId };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
+function setMemoryConfig(app, patch, safeStorage) {
+  const config = loadConfig(app, { safeStorage });
+  const next = {
+    ...config,
+    memoryBaseUrl: typeof patch?.memoryBaseUrl === 'string' ? patch.memoryBaseUrl : config.memoryBaseUrl,
+    memoryEnabled: typeof patch?.memoryEnabled === 'boolean' ? patch.memoryEnabled : config.memoryEnabled,
+  };
+  writeConfig(app, next, safeStorage);
+  return mergeConfig(next, safeStorage);
+}
+
 function setProviderKey(app, providerId, apiKey, safeStorage = getElectronSafeStorage()) {
   const config = loadConfig(app, { safeStorage });
   const providerKeys = { ...config.providerKeys, [providerId]: encryptSecret(apiKey, safeStorage) };
@@ -220,6 +241,8 @@ module.exports = {
   saveProviders,
   saveProfiles,
   setActiveProfile,
+  setActiveTone,
+  setMemoryConfig,
   setProviderKey,
   getProviderKey,
 };

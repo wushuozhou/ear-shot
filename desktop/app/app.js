@@ -4,6 +4,15 @@ const state = {
   activeProfileId: '',
   meta: null,
   service: { status: 'starting', message: '正在启动服务…' },
+  conversations: [],
+  currentConversation: null,
+  tones: [],
+  activeToneId: '',
+  memoryBaseUrl: '',
+  memoryEnabled: false,
+  agentBusy: false,
+  agentTicketId: '',
+  streamingText: '',
 };
 
 const $ = selector => document.querySelector(selector);
@@ -21,6 +30,41 @@ function statusLabel(status) {
 
 function currentProfile() {
   return state.profiles.find(profile => profile.id === state.activeProfileId);
+}
+
+function currentModel() {
+  const profile = currentProfile();
+  return state.providers.find(provider => provider.id === profile?.llmId)?.model || '未配置模型';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderMarkdown(value) {
+  const blocks = [];
+  let html = escapeHtml(value);
+  html = html.replace(/```([\s\S]*?)```/g, (_match, code) => {
+    const token = `@@CODE_${blocks.length}@@`;
+    blocks.push(`<pre><code>${code.trim()}</code></pre>`);
+    return token;
+  });
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .split('\n').map(line => {
+      if (/^\s*[-*]\s+/.test(line)) return `<ul><li>${line.replace(/^\s*[-*]\s+/, '')}</li></ul>`;
+      return line;
+    }).join('<br>');
+  blocks.forEach((block, index) => {
+    html = html.replace(`@@CODE_${index}@@`, block);
+  });
+  return html;
 }
 
 function renderTop() {
@@ -156,6 +200,288 @@ function providerCard(provider) {
   return card;
 }
 
+function renderConversationMessages() {
+  const stream = $('#message-stream');
+  if (!stream) return;
+  stream.replaceChildren();
+  const messages = state.currentConversation?.messages || [];
+  if (!messages.length && !state.streamingText) {
+    const empty = document.createElement('div');
+    empty.className = 'message-empty';
+    empty.innerHTML = '<div><strong>先聊点什么吧</strong>去供应商页配好模型，然后在这里输入你的问题。</div>';
+    stream.append(empty);
+  } else {
+    messages.forEach(message => {
+      const row = document.createElement('div');
+      row.className = `message-row ${message.role === 'user' ? 'user' : 'assistant'}`;
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      bubble.innerHTML = renderMarkdown(message.content);
+      row.append(bubble);
+      stream.append(row);
+    });
+    if (state.streamingText) {
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      bubble.innerHTML = renderMarkdown(state.streamingText);
+      row.append(bubble);
+      stream.append(row);
+    }
+  }
+  stream.scrollTop = stream.scrollHeight;
+}
+
+function renderConversation() {
+  content.replaceChildren();
+  const layout = document.createElement('div');
+  layout.className = 'conversation-layout';
+  const list = document.createElement('aside');
+  list.className = 'conversation-list';
+  const listHead = document.createElement('div');
+  listHead.className = 'conversation-list-head';
+  const listTitle = document.createElement('strong');
+  listTitle.textContent = '会话';
+  const newConversation = button('新建', 'button button-quiet button-small');
+  newConversation.addEventListener('click', async () => {
+    try {
+      state.currentConversation = await window.desktop.agent.conversationNew('新对话');
+      state.conversations = await window.desktop.agent.conversationList();
+      state.agentBusy = false;
+      state.streamingText = '';
+      renderConversation();
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  listHead.append(listTitle, newConversation);
+  list.append(listHead);
+  const items = document.createElement('div');
+  items.className = 'conversation-items';
+  if (!state.conversations.length) {
+    const empty = document.createElement('div');
+    empty.className = 'conversation-empty';
+    empty.textContent = '还没有会话。点击“新建”开始聊天。';
+    items.append(empty);
+  }
+  state.conversations.forEach(item => {
+    const itemRow = document.createElement('div');
+    itemRow.className = 'conversation-item-row';
+    const row = button(item.title || '新对话', `conversation-item${item.id === state.currentConversation?.id ? ' active' : ''}`);
+    row.title = item.title;
+    row.addEventListener('click', async () => {
+      try {
+        state.currentConversation = await window.desktop.agent.conversationLoad(item.id);
+        state.agentBusy = false;
+        state.streamingText = '';
+        renderConversation();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    row.addEventListener('contextmenu', async event => {
+      event.preventDefault();
+      const title = window.prompt('输入新的会话名称', item.title);
+      if (title === null) return;
+      try {
+        state.currentConversation = await window.desktop.agent.conversationRename(item.id, title);
+        state.conversations = await window.desktop.agent.conversationList();
+        renderConversation();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    const rename = button('✎', 'conversation-item-delete');
+    rename.title = '重命名会话';
+    rename.addEventListener('click', async event => {
+      event.stopPropagation();
+      const title = window.prompt('输入新的会话名称', item.title);
+      if (title === null) return;
+      try {
+        state.currentConversation = await window.desktop.agent.conversationRename(item.id, title);
+        state.conversations = await window.desktop.agent.conversationList();
+        renderConversation();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    const remove = button('×', 'conversation-item-delete');
+    remove.title = '删除会话';
+    remove.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (!window.confirm(`确定删除“${item.title}”吗？`)) return;
+      try {
+        await window.desktop.agent.conversationDelete(item.id);
+        state.conversations = await window.desktop.agent.conversationList();
+        if (state.currentConversation?.id === item.id) {
+          state.currentConversation = state.conversations.length
+            ? await window.desktop.agent.conversationLoad(state.conversations[0].id)
+            : await window.desktop.agent.conversationNew('新对话');
+          state.conversations = await window.desktop.agent.conversationList();
+        }
+        renderConversation();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    itemRow.append(row, rename, remove);
+    items.append(itemRow);
+  });
+  list.append(items);
+
+  const main = document.createElement('section');
+  main.className = 'conversation-main';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'conversation-toolbar';
+  const heading = document.createElement('h1');
+  heading.textContent = state.currentConversation?.title || '对话';
+  const tools = document.createElement('div');
+  tools.className = 'conversation-tools';
+  const toneLabel = document.createElement('label');
+  toneLabel.textContent = '语气';
+  const toneSelect = document.createElement('select');
+  state.tones.forEach(tone => {
+    const option = document.createElement('option');
+    option.value = tone.id;
+    option.textContent = tone.name;
+    option.selected = tone.id === state.activeToneId;
+    toneSelect.append(option);
+  });
+  toneSelect.addEventListener('change', async () => {
+    try {
+      await window.desktop.agent.setTone(toneSelect.value);
+      state.activeToneId = toneSelect.value;
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  toneLabel.append(toneSelect);
+  const memoryLabel = document.createElement('label');
+  memoryLabel.className = 'memory-toggle';
+  const memory = document.createElement('input');
+  memory.type = 'checkbox';
+  memory.checked = state.memoryEnabled;
+  memory.addEventListener('change', async () => {
+    try {
+      await window.desktop.agent.memorySet(state.memoryBaseUrl, memory.checked);
+      state.memoryEnabled = memory.checked;
+    } catch (error) {
+      memory.checked = state.memoryEnabled;
+      showError(error.message);
+    }
+  });
+  memoryLabel.append(memory, document.createTextNode('记忆'));
+  const model = document.createElement('span');
+  model.className = 'model-label';
+  model.title = currentModel();
+  model.textContent = `模型：${currentModel()}`;
+  tools.append(toneLabel, memoryLabel, model);
+  toolbar.append(heading, tools);
+  main.append(toolbar);
+  const stream = document.createElement('div');
+  stream.id = 'message-stream';
+  stream.className = 'message-stream';
+  main.append(stream);
+  const form = document.createElement('form');
+  form.className = 'message-form';
+  const input = document.createElement('textarea');
+  input.placeholder = '输入消息，按 Ctrl+Enter 发送';
+  input.disabled = state.agentBusy;
+  input.addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  const send = button(state.agentBusy ? '生成中…' : '发送', 'button');
+  send.disabled = state.agentBusy;
+  form.append(input, send);
+  if (state.agentBusy) {
+    const stop = button('停止', 'button stop-button');
+    stop.addEventListener('click', async () => {
+      if (state.agentTicketId) await window.desktop.agent.chatAbort(state.agentTicketId);
+    });
+    form.append(stop);
+  }
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    startAgentChat(input.value);
+  });
+  main.append(form);
+  const hint = document.createElement('div');
+  hint.className = 'conversation-hint';
+  hint.textContent = '提示：模型输出会按最小 Markdown 规则显示；语气规则会自动加入每轮对话。';
+  main.append(hint);
+  layout.append(list, main);
+  content.append(layout);
+  renderConversationMessages();
+}
+
+async function startAgentChat(text) {
+  const value = String(text || '').trim();
+  if (!value || state.agentBusy) return;
+  try {
+    if (!state.currentConversation) {
+      state.currentConversation = await window.desktop.agent.conversationNew('新对话');
+      state.conversations = await window.desktop.agent.conversationList();
+    }
+    state.currentConversation.messages.push({ role: 'user', content: value });
+    state.agentBusy = true;
+    state.streamingText = '';
+    renderConversation();
+    const result = await window.desktop.agent.chatStart(state.currentConversation.id, value);
+    state.agentTicketId = result.ticketId;
+    renderConversation();
+  } catch (error) {
+    state.agentBusy = false;
+    showError(error.message);
+    renderConversation();
+  }
+}
+
+async function handleAgentEvent(event) {
+  if (!event || event.conversationId !== state.currentConversation?.id) return;
+  if (event.type === 'delta') {
+    state.streamingText += event.delta || '';
+    renderConversationMessages();
+  } else if (event.type === 'done') {
+    state.currentConversation = await window.desktop.agent.conversationLoad(event.conversationId);
+    state.conversations = await window.desktop.agent.conversationList();
+    state.agentBusy = false;
+    state.agentTicketId = '';
+    state.streamingText = '';
+    renderConversation();
+  } else if (event.type === 'error') {
+    state.agentBusy = false;
+    state.agentTicketId = '';
+    state.streamingText = '';
+    showError(event.message || '对话请求失败');
+    state.currentConversation = await window.desktop.agent.conversationLoad(event.conversationId);
+    renderConversation();
+  }
+}
+
+async function loadAgentState() {
+  const [toneData, memory, conversations] = await Promise.all([
+    window.desktop.agent.tones(),
+    window.desktop.agent.memoryGet(),
+    window.desktop.agent.conversationList(),
+  ]);
+  state.tones = toneData.tones || [];
+  state.activeToneId = toneData.activeToneId || state.tones[0]?.id || '';
+  state.memoryBaseUrl = memory.memoryBaseUrl || '';
+  state.memoryEnabled = memory.memoryEnabled === true;
+  state.conversations = conversations || [];
+  if (state.conversations.length) {
+    state.currentConversation = await window.desktop.agent.conversationLoad(state.conversations[0].id);
+  } else {
+    state.currentConversation = await window.desktop.agent.conversationNew('新对话');
+    state.conversations = await window.desktop.agent.conversationList();
+  }
+  renderRoute();
+}
+
 function renderProviders() {
   content.replaceChildren();
   const heading = document.createElement('div');
@@ -282,6 +608,65 @@ function renderSettings() {
   help.textContent = '安装目录由安装程序选择。数据目录可以改到你方便备份的位置；修改供应商或路径后，请重启服务使设置生效。';
   card.append(help);
   content.append(card);
+
+  const memoryCard = document.createElement('section');
+  memoryCard.className = 'settings-card settings-grid';
+  const memoryTitle = document.createElement('h2');
+  memoryTitle.textContent = '外部记忆服务';
+  memoryCard.append(memoryTitle);
+  const memoryRow = document.createElement('div');
+  memoryRow.className = 'setting-row';
+  const memoryLabel = document.createElement('div');
+  memoryLabel.className = 'setting-label';
+  memoryLabel.textContent = '启用记忆';
+  const memoryInput = document.createElement('input');
+  memoryInput.type = 'checkbox';
+  memoryInput.checked = state.memoryEnabled;
+  const memorySave = button('保存开关', 'button button-quiet button-small');
+  memorySave.addEventListener('click', async () => {
+    try {
+      await window.desktop.agent.memorySet(memoryUrl.value, memoryInput.checked);
+      state.memoryEnabled = memoryInput.checked;
+      state.memoryBaseUrl = memoryUrl.value.trim();
+      showMessage('记忆设置已保存。');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  memoryRow.append(memoryLabel, memoryInput, memorySave);
+  memoryCard.append(memoryRow);
+  const memoryUrlRow = document.createElement('div');
+  memoryUrlRow.className = 'setting-row';
+  const memoryUrlLabel = document.createElement('div');
+  memoryUrlLabel.className = 'setting-label';
+  memoryUrlLabel.textContent = '服务地址';
+  const memoryUrl = document.createElement('input');
+  memoryUrl.value = state.memoryBaseUrl;
+  memoryUrl.placeholder = '例如 http://127.0.0.1:8765';
+  const testMemory = button('测试连接', 'button button-quiet button-small');
+  const testResult = document.createElement('div');
+  testResult.className = 'memory-test-result';
+  testMemory.addEventListener('click', async () => {
+    testMemory.disabled = true;
+    testResult.textContent = '测试中…';
+    try {
+      const result = await window.desktop.agent.memoryTest(memoryUrl.value);
+      testResult.textContent = result.message;
+      testResult.className = `memory-test-result ${result.ok ? 'ok' : 'fail'}`;
+    } catch (error) {
+      testResult.textContent = error.message;
+      testResult.className = 'memory-test-result fail';
+    } finally {
+      testMemory.disabled = false;
+    }
+  });
+  memoryUrlRow.append(memoryUrlLabel, memoryUrl, testMemory);
+  memoryCard.append(memoryUrlRow, testResult);
+  const memoryHelp = document.createElement('div');
+  memoryHelp.className = 'setting-help';
+  memoryHelp.textContent = '关闭时不会请求记忆服务。开启后，每轮对话前召回相关内容，结束后保存本轮摘要；记忆服务默认使用本机 8765 端口。';
+  memoryCard.append(memoryHelp);
+  content.append(memoryCard);
 }
 
 function settingRow(label, value) {
@@ -478,10 +863,11 @@ async function refresh() {
 }
 
 function renderRoute() {
-  const route = location.hash || '#/providers';
+  const route = location.hash || '#/conversation';
   const pathName = route.split('?')[0].replace(/^#/, '') || '/providers';
   setActiveNav(pathName);
-  if (pathName === '/call') renderCall();
+  if (pathName === '/conversation') renderConversation();
+  else if (pathName === '/call') renderCall();
   else if (pathName === '/settings') renderSettings();
   else renderProviders();
 }
@@ -497,10 +883,11 @@ $('#profile-select').addEventListener('change', async event => {
 });
 $('#open-logs').addEventListener('click', () => window.desktop.app.openPath('logs'));
 window.addEventListener('hashchange', renderRoute);
+window.desktop.agent.onEvent(handleAgentEvent);
 window.desktop.onState(async service => {
   state.service = service;
   renderTop();
   if (location.hash === '#/call') renderRoute();
   try { state.meta = await window.desktop.app.getMeta(); } catch (_) { /* keep last status */ }
 });
-refresh().catch(error => showError(`无法读取桌面状态：${error.message}`));
+refresh().then(loadAgentState).catch(error => showError(`无法读取桌面状态：${error.message}`));
