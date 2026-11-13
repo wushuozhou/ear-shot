@@ -4,6 +4,13 @@
 
 本仓库把 Earshot、Tidemark 的本地化思路和 `tone.skill` 的语气规则整理成了一个小白可用的程序。无需数据库、无需 npm 依赖安装，Node.js 20+ 即可运行。
 
+## 来源与署名
+
+- 本项目基于 [facc33176-rgb/earshot](https://github.com/facc33176-rgb/earshot)（MIT）二次开发，原始版权归 Earshot authors 所有，完整许可见仓库根目录 [LICENSE](./LICENSE)。
+- 语气规则整理自 [facc33176-rgb/tone.skill](https://github.com/facc33176-rgb/tone.skill)（MIT），整理说明见 [desktop/skills/README.md](./desktop/skills/README.md)。
+- 记忆功能可选对接 [Tidemark](https://github.com/facc33176-rgb/Tidemark-anchor-memory-)（AGPL-3.0），仅通过其 HTTP 接口调用，仓库中不包含其任何代码。
+- 桌面外壳、模型供应商适配层、图形界面为新增部分。
+
 ## 三步使用
 
 ### Windows
@@ -76,7 +83,7 @@ API 密钥只保存在本机 `.env`，不要提交到 Git。每次通话会消�
 ## 自定义人格和语气
 
 - 修改 `persona.md` 可改变它是谁、怎么称呼你。
-- `skills/say-it-like-you-mean-it/` 包含来自 `tone.skill` 的语气规则和提示词，可用于进一步调整模型表达。
+- `desktop/skills/` 包含来自 `tone.skill` 的整理语气规则和提示词（`tones.json` 与 `README.md`），可用于进一步调整模型表达。
 - 中文安装与使用说明见 `docs/使用教程.md`。
 
 ## 桌面应用（桌面版使用方式）
