@@ -139,7 +139,7 @@ function startAgentChat(conversationId, userText) {
         query: userText,
       });
       const messages = [
-        { role: 'system', content: buildSystemPrompt({ persona: loadPersona(rootDir), tone, memories }) },
+        { role: 'system', content: buildSystemPrompt({ persona: config.persona || loadPersona(rootDir), tone, memories }) },
         ...conversation.messages,
       ];
       const completed = await streamChat({
@@ -193,7 +193,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
-  mainWindow.loadFile(path.join(__dirname, 'loading.html'));
+  mainWindow.loadFile(path.join(app.getAppPath(), 'loading.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
 }
 
@@ -343,7 +343,7 @@ async function startService({ resetRestarts = false } = {}) {
     publish({ status: 'ready', message: `服务已启动，正在打开 Earshot（端口 ${servicePort}）…` });
     writeLog(`服务探活成功：http://127.0.0.1:${servicePort}/api/info`);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      await mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
+      await mainWindow.loadFile(path.join(app.getAppPath(), 'app', 'index.html'));
     }
     if (selfTestMode) {
       console.log(`SELF_TEST_OK port=${servicePort}`);
@@ -459,6 +459,21 @@ function registerIpc() {
     config = { ...config, dataDir: dataDir.trim() };
     writeConfig(app, config, safeStorage);
     return { dataDir: config.dataDir };
+  });
+  ipcMain.handle('settings:get', () => ({
+    persona: config.persona,
+    avatar: config.avatar || 'preset-1',
+    theme: config.theme || 'deep-space',
+  }));
+  ipcMain.handle('settings:save', (_event, patch) => {
+    if (!patch || typeof patch !== 'object') throw new Error('设置参数无效');
+    const next = { ...config };
+    if (patch.persona && typeof patch.persona === 'object') next.persona = { ...config.persona, ...patch.persona };
+    if (typeof patch.avatar === 'string') next.avatar = patch.avatar;
+    if (typeof patch.theme === 'string' && ['deep-space', 'mono-light', 'warm-night', 'contrast'].includes(patch.theme)) next.theme = patch.theme;
+    config = next;
+    writeConfig(app, config, safeStorage);
+    return { persona: config.persona, avatar: config.avatar, theme: config.theme };
   });
   ipcMain.handle('agent:tones', () => ({ tones: toneOptions, activeToneId: config.activeToneId }));
   ipcMain.handle('agent:tone-set', (_event, id) => {

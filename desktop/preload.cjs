@@ -46,6 +46,10 @@ contextBridge.exposeInMainWorld('desktop', {
       if (target !== 'config' && target !== 'logs') throw new TypeError('只能打开配置目录或日志目录');
       return ipcRenderer.invoke('app:open-path', target);
     },
+    settings: {
+      get: () => ipcRenderer.invoke('settings:get'),
+      save: patch => ipcRenderer.invoke('settings:save', patch),
+    },
     setDataDir: dataDir => {
       if (typeof dataDir !== 'string') throw new TypeError('数据目录必须是字符串');
       return ipcRenderer.invoke('app:set-data-dir', dataDir);

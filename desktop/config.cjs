@@ -21,6 +21,16 @@ const DEFAULT_CONFIG = {
   providerKeys: {},
   envSecrets: {},
   onboardingDismissed: false,
+  persona: {
+    name: 'Earshot',
+    self: '我',
+    user: '你',
+    personality: '认真、温和、可靠',
+    style: '清楚、自然、简洁',
+    taboo: '',
+  },
+  avatar: 'preset-1',
+  theme: 'deep-space',
 };
 
 function configPath(app) {

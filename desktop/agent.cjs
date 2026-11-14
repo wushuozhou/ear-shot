@@ -39,7 +39,9 @@ function buildSystemPrompt({ persona, tone, memories }) {
     : '目前没有可用的相关记忆。';
   return [
     '【人设】',
-    String(persona || DEFAULT_PERSONA).trim(),
+    (persona && typeof persona === 'object'
+      ? `名字：${persona.name || 'Earshot'}；自称：${persona.self || '我'}；称呼对方：${persona.user || '你'}；性格：${persona.personality || ''}；说话风格：${persona.style || ''}；禁忌话题：${persona.taboo || '无'}`
+      : String(persona || DEFAULT_PERSONA)).trim(),
     '',
     '【语气规则】',
     tonePrompt.trim(),
