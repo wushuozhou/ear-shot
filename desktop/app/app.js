@@ -16,10 +16,12 @@ const state = {
   agentBusy: false,
   agentTicketId: '',
   streamingText: '',
+  draft: '',
   chat: { waveform: true },
   avatars: { ai: 'preset-1', user: 'preset-4' },
 };
 
+const ACTIVE_CONVERSATION_KEY = 'earshot:active-conversation';
 const AVATAR_PRESETS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'preset-6'];
 const PHONE_THEME = ['deep-space', 'mono-light', 'warm-night', 'contrast'];
 
@@ -31,8 +33,39 @@ document.addEventListener('pointerdown', event => {
   document.querySelectorAll('.conversation-item-row.expanded').forEach(item => item.classList.remove('expanded'));
 });
 
-function escapeText(value) {
-  return String(value ?? '');
+function rememberActiveConversation(id) {
+  try {
+    if (id) localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    else localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+  } catch (_) {
+    // localStorage 不可用时不影响会话切换。
+  }
+}
+
+function rememberedConversationId() {
+  try {
+    return localStorage.getItem(ACTIVE_CONVERSATION_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// 切换联系人：加载该联系人自己的聊天记录，并中断上一轮的流式状态。
+async function selectConversation(id) {
+  if (!id) return;
+  const conversation = await window.desktop.agent.conversationLoad(id);
+  state.currentConversation = conversation;
+  state.agentBusy = false;
+  state.agentTicketId = '';
+  state.streamingText = '';
+  state.draft = '';
+  rememberActiveConversation(conversation.id);
+  return conversation;
+}
+
+async function reloadConversations() {
+  state.conversations = (await window.desktop.agent.conversationList()) || [];
+  return state.conversations;
 }
 
 function activeProfileProviders() {
@@ -552,7 +585,9 @@ function renderConversationMessages() {
   if (!messages.length && !state.streamingText) {
     const empty = document.createElement('div');
     empty.className = 'message-empty';
-    empty.innerHTML = '<div><strong>先聊点什么吧</strong>去供应商页配好模型，然后在这里输入你的问题。</div>';
+    empty.innerHTML = state.currentConversation
+      ? '<div><strong>先聊点什么吧</strong>这个联系人还没有聊天记录，在下面输入第一句话。</div>'
+      : '<div><strong>还没有联系人</strong>点击左侧「新建」创建一个联系人后开始聊天。</div>';
     stream.append(empty);
   } else {
     messages.forEach(message => stream.append(rowFor(message.role, message.content)));
@@ -574,10 +609,9 @@ function renderConversation() {
   const newConversation = button('新建', 'button button-quiet button-small');
   newConversation.addEventListener('click', async () => {
     try {
-      state.currentConversation = await window.desktop.agent.conversationNew('新对话');
-      state.conversations = await window.desktop.agent.conversationList();
-      state.agentBusy = false;
-      state.streamingText = '';
+      const created = await window.desktop.agent.conversationNew('新对话');
+      await reloadConversations();
+      await selectConversation(created.id);
       renderConversation();
       openConversationEditor(state.currentConversation);
     } catch (error) {
@@ -599,8 +633,8 @@ function renderConversation() {
     itemRow.className = 'conversation-item-row';
     const active = item.id === state.currentConversation?.id;
     const row = button('', `conversation-item${active ? ' active' : ''}`);
-    row.title = item.title;
-    row.append(avatarNode(item.avatar || conversationSettings(item).avatar || state.avatars.ai, 'conversation-avatar'));
+    row.title = item.title || '新对话';
+    row.append(avatarNode(conversationAvatar(item), 'conversation-avatar'));
     const body = document.createElement('span');
     body.className = 'conversation-item-body';
     const name = document.createElement('span');
@@ -608,7 +642,7 @@ function renderConversation() {
     name.textContent = item.title || '新对话';
     const sub = document.createElement('span');
     sub.className = 'conversation-item-sub';
-    sub.textContent = '点击开始聊天';
+    sub.textContent = item.preview || '';
     body.append(name, sub);
     row.append(body);
     row.addEventListener('click', async () => {
@@ -616,67 +650,43 @@ function renderConversation() {
         itemRow.classList.remove('expanded');
         return;
       }
+      if (item.id === state.currentConversation?.id) return;
       try {
-        state.currentConversation = await window.desktop.agent.conversationLoad(item.id);
-        state.agentBusy = false;
-        state.streamingText = '';
+        await selectConversation(item.id);
         renderConversation();
       } catch (error) {
         showError(error.message);
       }
     });
-    const remove = button('删除', 'conversation-item-delete');
-    remove.addEventListener('click', async event => {
+    const actions = document.createElement('div');
+    actions.className = 'conversation-item-actions';
+    // 侧栏很窄，按钮用图标 + 短字，保证滑开后头像和名字仍然看得见。
+    const swipeAction = (label, title, icon, className) => {
+      const action = button('', className);
+      action.title = title;
+      action.setAttribute('aria-label', title);
+      action.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg><span>${label}</span>`;
+      return action;
+    };
+    const clear = swipeAction('清空', '清空聊天记录',
+      '<path d="M4 7h16M9 7V5h6v2"/><path d="M7 7v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7"/>',
+      'conversation-item-action');
+    clear.addEventListener('click', event => {
       event.stopPropagation();
+      itemRow.classList.remove('expanded');
+      openClearConfirm(item);
+    });
+    const remove = swipeAction('删除', '删除联系人',
+      '<path d="M18 6 6 18M6 6l12 12"/>',
+      'conversation-item-action conversation-item-delete');
+    remove.addEventListener('click', event => {
+      event.stopPropagation();
+      itemRow.classList.remove('expanded');
       openDeleteConfirm(item);
     });
-    itemRow.append(row, remove);
-    let startX = 0;
-    let offsetX = 0;
-    let dragging = false;
-    let swiped = false;
-    let wasExpanded = false;
-    itemRow.addEventListener('pointerdown', event => {
-      wasExpanded = itemRow.classList.contains('expanded');
-      items.querySelectorAll('.conversation-item-row.expanded').forEach(other => {
-        if (other !== itemRow) other.classList.remove('expanded');
-      });
-      startX = event.clientX;
-      offsetX = 0;
-      dragging = true;
-      itemRow.setPointerCapture(event.pointerId);
-    });
-    itemRow.addEventListener('pointermove', event => {
-      if (!dragging) return;
-      offsetX = Math.max(-86, Math.min(0, event.clientX - startX));
-      swiped = Math.abs(offsetX) > 5;
-      itemRow.style.setProperty('--swipe-x', `${offsetX}px`);
-    });
-    itemRow.addEventListener('pointerup', event => {
-      if (!dragging) return;
-      dragging = false;
-      itemRow.releasePointerCapture(event.pointerId);
-      if (offsetX < -35) itemRow.classList.add('expanded');
-      else if (!wasExpanded) itemRow.classList.remove('expanded');
-      itemRow.style.removeProperty('--swipe-x');
-      if (itemRow.classList.contains('expanded')) {
-        items.querySelectorAll('.conversation-item-row.expanded').forEach(other => {
-          if (other !== itemRow) other.classList.remove('expanded');
-        });
-      }
-    });
-    itemRow.addEventListener('click', event => {
-      if (!swiped) return;
-      swiped = false;
-      event.stopPropagation();
-      event.preventDefault();
-    }, true);
-    itemRow.addEventListener('click', event => {
-      if (itemRow.classList.contains('expanded') && !event.target.closest('.conversation-item-delete')) {
-        event.stopPropagation();
-        itemRow.classList.remove('expanded');
-      }
-    });
+    actions.append(clear, remove);
+    itemRow.append(row, actions);
+    attachSwipe(itemRow, items);
     items.append(itemRow);
   });
   list.append(items);
@@ -692,10 +702,24 @@ function renderConversation() {
   const heading = document.createElement('h1');
   heading.textContent = state.currentConversation?.title || '对话';
   identityText.append(heading);
+  if (state.currentConversation) {
+    const subtitle = document.createElement('span');
+    subtitle.className = 'model-label';
+    subtitle.textContent = conversationModelName(state.currentConversation);
+    identityText.append(subtitle);
+  }
   identity.append(identityText);
   const tools = document.createElement('div');
   tools.className = 'conversation-tools';
-  toolbar.append(identity);
+  if (state.currentConversation) {
+    const edit = button('联系人设置', 'button button-quiet button-small');
+    edit.addEventListener('click', () => openConversationEditor(state.currentConversation));
+    const clearCurrent = button('清空记录', 'button button-quiet button-small');
+    clearCurrent.disabled = !(state.currentConversation.messages || []).length;
+    clearCurrent.addEventListener('click', () => openClearConfirm(state.currentConversation));
+    tools.append(edit, clearCurrent);
+  }
+  toolbar.append(identity, tools);
   main.append(toolbar);
   const stream = document.createElement('div');
   stream.id = 'message-stream';
@@ -704,7 +728,9 @@ function renderConversation() {
   const form = document.createElement('form');
   form.className = 'message-form';
   const input = document.createElement('textarea');
-  input.disabled = state.agentBusy || onboardingNeeded();
+  input.disabled = state.agentBusy || onboardingNeeded() || !state.currentConversation;
+  input.value = state.draft || '';
+  input.addEventListener('input', () => { state.draft = input.value; });
   input.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -712,16 +738,98 @@ function renderConversation() {
     }
   });
   const send = button('发送', 'button');
-  send.disabled = state.agentBusy || onboardingNeeded();
+  send.type = 'submit';
+  send.disabled = input.disabled;
   form.append(input, send);
   form.addEventListener('submit', event => {
     event.preventDefault();
-    startAgentChat(input.value);
+    const value = input.value;
+    input.value = '';
+    state.draft = '';
+    startAgentChat(value);
   });
   main.append(form);
   layout.append(list, main);
   content.append(layout);
   renderConversationMessages();
+}
+
+// iOS 风格侧滑：操作按钮垫在行下层，靠前景行左移"揭开"。
+// 不用 setPointerCapture——指针捕获会把后续 click 重定向到容器，让行内按钮点不动。
+function attachSwipe(itemRow, items) {
+  const actions = itemRow.querySelector('.conversation-item-actions');
+  let startX = 0;
+  let startY = 0;
+  let offsetX = 0;
+  let dragging = false;
+  let swiped = false;
+  const maxSwipe = () => actions?.offsetWidth || 88;
+  const collapseOthers = () => {
+    items.querySelectorAll('.conversation-item-row.expanded').forEach(other => {
+      if (other !== itemRow) other.classList.remove('expanded');
+    });
+  };
+  const reset = () => {
+    dragging = false;
+    itemRow.classList.remove('swiping');
+    itemRow.style.removeProperty('--swipe-x');
+  };
+  itemRow.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (event.target.closest('.conversation-item-action')) return;
+    collapseOthers();
+    startX = event.clientX;
+    startY = event.clientY;
+    offsetX = itemRow.classList.contains('expanded') ? -maxSwipe() : 0;
+    dragging = true;
+    swiped = false;
+  });
+  itemRow.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    const dx = event.clientX - startX;
+    // 纵向滑动优先交给列表滚动，不抢手势。
+    if (!swiped && Math.abs(event.clientY - startY) > Math.abs(dx)) return;
+    const base = itemRow.classList.contains('expanded') ? -maxSwipe() : 0;
+    // 超出上限后阻尼，手感接近 iOS。
+    let next = base + dx;
+    if (next > 0) next *= 0.3;
+    if (next < -maxSwipe()) next = -maxSwipe() + (next + maxSwipe()) * 0.3;
+    offsetX = next;
+    if (Math.abs(dx) > 6) {
+      swiped = true;
+      itemRow.classList.add('swiping');
+    }
+    if (swiped) itemRow.style.setProperty('--swipe-x', `${-offsetX}px`);
+  });
+  const finish = () => {
+    if (!dragging) return;
+    const limit = maxSwipe();
+    const shouldOpen = offsetX < -limit / 2;
+    reset();
+    if (!swiped) return;
+    // 展开宽度以按钮实际宽度为准，避免 CSS 写死值与按钮宽度不一致。
+    itemRow.style.setProperty('--swipe-open', `${limit}px`);
+    itemRow.classList.toggle('expanded', shouldOpen);
+    if (shouldOpen) collapseOthers();
+  };
+  itemRow.addEventListener('pointerup', finish);
+  itemRow.addEventListener('pointerleave', finish);
+  itemRow.addEventListener('pointercancel', () => {
+    reset();
+    swiped = false;
+  });
+  // 只有真正拖动过才吞掉这次点击，普通点击要能正常切换联系人。
+  // 捕获阶段先放行按钮，避免上一次滑动的残留状态吞掉按钮点击。
+  itemRow.addEventListener('click', event => {
+    if (event.target.closest('.conversation-item-action')) {
+      swiped = false;
+      return;
+    }
+    if (!swiped) return;
+    swiped = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }, true);
 }
 
 function openConversationEditor(item) {
@@ -859,8 +967,10 @@ function openConversationEditor(item) {
         tone: toneInput.value.trim(),
         number: digits,
       });
-      if (state.currentConversation?.id === item.id) state.currentConversation = updated;
-      state.conversations = await window.desktop.agent.conversationList();
+      if (state.currentConversation?.id === item.id) {
+        state.currentConversation = { ...updated, messages: state.currentConversation.messages || updated.messages || [] };
+      }
+      await reloadConversations();
       backdrop.remove();
       renderRoute();
       showMessage('联系人设置已保存');
@@ -872,38 +982,105 @@ function openConversationEditor(item) {
   });
 }
 
+function openClearAllConfirm() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'modal delete-confirm-modal';
+  modal.innerHTML = '<h2>清空全部聊天记录</h2><p>所有联系人的聊天内容都会被删除，联系人本身会保留。此操作不可撤销。</p>';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = button('取消', 'button button-quiet');
+  const confirm = button('全部清空', 'button button-danger');
+  cancel.addEventListener('click', () => backdrop.remove());
+  confirm.addEventListener('click', async () => {
+    confirm.disabled = true;
+    try {
+      const result = await window.desktop.agent.conversationClearAll();
+      await reloadConversations();
+      if (state.currentConversation) await selectConversation(state.currentConversation.id);
+      backdrop.remove();
+      renderRoute();
+      showMessage(`已清空 ${result?.cleared ?? state.conversations.length} 个联系人的聊天记录`);
+    } catch (error) {
+      confirm.disabled = false;
+      showError(error.message);
+    }
+  });
+  actions.append(cancel, confirm);
+  modal.append(actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+}
+
+function openClearConfirm(item) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'modal delete-confirm-modal';
+  modal.innerHTML = `<h2>清空聊天记录</h2><p>确定清空“${escapeHtml(item.title || '新对话')}”的聊天记录吗？联系人本身、头像和人设会保留。</p>`;
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = button('取消', 'button button-quiet');
+  const confirm = button('清空', 'button button-danger');
+  cancel.addEventListener('click', () => backdrop.remove());
+  confirm.addEventListener('click', async () => {
+    confirm.disabled = true;
+    try {
+      await window.desktop.agent.conversationClear(item.id);
+      await reloadConversations();
+      if (state.currentConversation?.id === item.id) await selectConversation(item.id);
+      backdrop.remove();
+      renderRoute();
+      showMessage('聊天记录已清空');
+    } catch (error) {
+      confirm.disabled = false;
+      showError(error.message);
+    }
+  });
+  actions.append(cancel, confirm);
+  modal.append(actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+}
+
 function openDeleteConfirm(item) {
-      const backdrop = document.createElement('div');
-      backdrop.className = 'modal-backdrop';
-      const modal = document.createElement('div');
-      modal.className = 'modal delete-confirm-modal';
-      modal.innerHTML = `<h2>删除联系人</h2><p>确定删除“${escapeHtml(item.title || '新对话')}”吗？聊天记录也会被删除。</p>`;
-      const actions = document.createElement('div');
-      actions.className = 'modal-actions';
-      const cancel = button('取消', 'button button-quiet');
-      const confirm = button('删除', 'button button-danger');
-      cancel.addEventListener('click', () => backdrop.remove());
-      confirm.addEventListener('click', async () => {
-        confirm.disabled = true;
-        try {
-          await window.desktop.agent.conversationDelete(item.id);
-          state.conversations = await window.desktop.agent.conversationList();
-          if (state.currentConversation?.id === item.id) {
-            state.currentConversation = state.conversations.length
-              ? await window.desktop.agent.conversationLoad(state.conversations[0].id)
-              : await window.desktop.agent.conversationNew('新联系人');
-            state.conversations = await window.desktop.agent.conversationList();
-          }
-          backdrop.remove();
-          renderConversation();
-        } catch (error) {
-          confirm.disabled = false;
-          showError(error.message);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'modal delete-confirm-modal';
+  modal.innerHTML = `<h2>删除联系人</h2><p>确定删除“${escapeHtml(item.title || '新对话')}”吗？聊天记录也会被删除。</p>`;
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = button('取消', 'button button-quiet');
+  const confirm = button('删除', 'button button-danger');
+  cancel.addEventListener('click', () => backdrop.remove());
+  confirm.addEventListener('click', async () => {
+    confirm.disabled = true;
+    try {
+      await window.desktop.agent.conversationDelete(item.id);
+      await reloadConversations();
+      if (state.currentConversation?.id === item.id) {
+        if (state.conversations.length) {
+          await selectConversation(state.conversations[0].id);
+        } else {
+          state.currentConversation = null;
+          state.streamingText = '';
+          state.agentBusy = false;
+          rememberActiveConversation('');
         }
-      });
-      actions.append(cancel, confirm);
-      modal.append(actions);
-      backdrop.append(modal);
+      }
+      backdrop.remove();
+      renderRoute();
+      showMessage('联系人已删除');
+    } catch (error) {
+      confirm.disabled = false;
+      showError(error.message);
+    }
+  });
+  actions.append(cancel, confirm);
+  modal.append(actions);
+  backdrop.append(modal);
   document.body.append(backdrop);
 }
 
@@ -912,16 +1089,32 @@ async function startAgentChat(text) {
   if (!value || state.agentBusy) return;
   try {
     if (!state.currentConversation) {
-      state.currentConversation = await window.desktop.agent.conversationNew('新对话');
-      state.conversations = await window.desktop.agent.conversationList();
+      const created = await window.desktop.agent.conversationNew('新对话');
+      await reloadConversations();
+      await selectConversation(created.id);
     }
-    state.currentConversation.messages.push({ role: 'user', content: value });
+    const conversationId = state.currentConversation.id;
+    // 复制一份再追加，不要就地改动已加载的会话对象。
+    state.currentConversation = {
+      ...state.currentConversation,
+      messages: [...(state.currentConversation.messages || []), { role: 'user', content: value }],
+    };
     state.agentBusy = true;
     state.streamingText = '';
     renderConversation();
-    const result = await window.desktop.agent.chatStart(state.currentConversation.id, value);
+    const result = await window.desktop.agent.chatStart(conversationId, value);
     state.agentTicketId = result.ticketId;
-    renderConversation();
+    // 用户那一句已落盘，这里以文件为准刷新，顺带更新侧边栏预览。
+    try {
+      const saved = await window.desktop.agent.conversationLoad(conversationId);
+      if (state.currentConversation?.id === conversationId) {
+        state.currentConversation = saved;
+      }
+      await reloadConversations();
+      if (location.hash.startsWith('#/conversation')) renderConversation();
+    } catch (_) {
+      // 刷新失败不影响当前这轮对话。
+    }
   } catch (error) {
     state.agentBusy = false;
     showError(error.message);
@@ -934,21 +1127,22 @@ async function handleAgentEvent(event) {
   if (event.type === 'delta') {
     state.streamingText += event.delta || '';
     renderConversationMessages();
-  } else if (event.type === 'done') {
-    state.currentConversation = await window.desktop.agent.conversationLoad(event.conversationId);
-    state.conversations = await window.desktop.agent.conversationList();
-    state.agentBusy = false;
-    state.agentTicketId = '';
-    state.streamingText = '';
-    renderConversation();
-  } else if (event.type === 'error') {
-    state.agentBusy = false;
-    state.agentTicketId = '';
-    state.streamingText = '';
-    showError(event.message || '对话请求失败');
-    state.currentConversation = await window.desktop.agent.conversationLoad(event.conversationId);
-    renderConversation();
+    return;
   }
+  if (event.type !== 'done' && event.type !== 'error') return;
+  state.agentBusy = false;
+  state.agentTicketId = '';
+  state.streamingText = '';
+  if (event.type === 'error') showError(event.message || '对话请求失败');
+  try {
+    // 消息只以主进程落盘的记录为准，避免界面与文件不一致。
+    const conversation = await window.desktop.agent.conversationLoad(event.conversationId);
+    if (state.currentConversation?.id === conversation.id) state.currentConversation = conversation;
+    await reloadConversations();
+  } catch (error) {
+    showError(error.message);
+  }
+  renderConversation();
 }
 
 async function loadAgentState() {
@@ -962,11 +1156,18 @@ async function loadAgentState() {
   state.memoryBaseUrl = memory.memoryBaseUrl || '';
   state.memoryEnabled = memory.memoryEnabled === true;
   state.conversations = conversations || [];
-  if (state.conversations.length) {
-    state.currentConversation = await window.desktop.agent.conversationLoad(state.conversations[0].id);
+  // 重启后回到上次打开的联系人，而不是永远落在列表第一个。
+  const remembered = rememberedConversationId();
+  const target = state.conversations.find(item => item.id === remembered) || state.conversations[0];
+  if (target) {
+    try {
+      await selectConversation(target.id);
+    } catch (_) {
+      state.currentConversation = null;
+    }
   } else {
-    state.currentConversation = await window.desktop.agent.conversationNew('新对话');
-    state.conversations = await window.desktop.agent.conversationList();
+    state.currentConversation = null;
+    rememberActiveConversation('');
   }
   renderRoute();
 }
@@ -1066,7 +1267,7 @@ function renderCall() {
   contacts.className = 'call-contacts';
   state.conversations.forEach(item => {
     const contact = button('', 'call-contact');
-    contact.append(avatarNode(item.avatar || conversationSettings(item).avatar || state.avatars.ai, 'call-avatar'));
+    contact.append(avatarNode(conversationAvatar(item), 'call-avatar'));
     const info = document.createElement('div');
     info.className = 'call-contact-info';
     const name = document.createElement('strong');
@@ -1301,21 +1502,41 @@ async function renderSettings() {
   state.conversations.forEach(item => {
     const row = document.createElement('div');
     row.className = 'settings-contact-row';
-    row.append(avatarNode(item.avatar || conversationSettings(item).avatar || state.avatars.ai, 'conversation-avatar'));
+    row.append(avatarNode(conversationAvatar(item), 'conversation-avatar'));
     const text = document.createElement('div');
     text.className = 'settings-contact-text';
     const name = document.createElement('strong');
     name.textContent = item.title || '新对话';
     const sub = document.createElement('span');
     const itemNumber = item.number || conversationSettings(item).number;
-    sub.textContent = itemNumber ? formatNumber(itemNumber) : conversationModelName(item);
+    const counter = item.messageCount ? `${item.messageCount} 条消息` : '暂无聊天记录';
+    sub.textContent = `${itemNumber ? formatNumber(itemNumber) : conversationModelName(item)} · ${counter}`;
     text.append(name, sub);
+    const rowActions = document.createElement('div');
+    rowActions.className = 'settings-contact-actions';
     const edit = button('编辑', 'button button-quiet button-small');
     edit.addEventListener('click', () => openConversationEditor(item));
-    row.append(text, edit);
+    const clear = button('清空记录', 'button button-quiet button-small');
+    clear.disabled = !item.messageCount;
+    clear.addEventListener('click', () => openClearConfirm(item));
+    const remove = button('删除', 'button button-danger button-small');
+    remove.addEventListener('click', () => openDeleteConfirm(item));
+    rowActions.append(edit, clear, remove);
+    row.append(text, rowActions);
     contactList.append(row);
   });
   contactCard.append(contactNote, contactList);
+
+  const chatDataActions = document.createElement('div');
+  chatDataActions.className = 'settings-actions';
+  const clearAll = button('清空全部聊天记录', 'button button-danger');
+  clearAll.disabled = !state.conversations.some(item => item.messageCount);
+  clearAll.addEventListener('click', () => openClearAllConfirm());
+  chatDataActions.append(clearAll);
+  const chatDataNote = document.createElement('p');
+  chatDataNote.className = 'settings-note';
+  chatDataNote.textContent = '清空只会删除聊天内容，联系人、头像、人设与号码都会保留。';
+  contactCard.append(chatDataNote, chatDataActions);
   content.append(contactCard);
 
   const storageCard = document.createElement('section');

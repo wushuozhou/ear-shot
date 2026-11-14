@@ -225,6 +225,26 @@ async function testMemoryConnection({ memoryBaseUrl, fetchImpl = globalThis.fetc
 
 const AVATAR_VALUE = /^(?:preset-[1-6]|data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)$/;
 
+function normalizeMessages(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      role: item.role === 'user' ? 'user' : 'assistant',
+      content: String(item.content ?? ''),
+    }))
+    .filter(item => item.content.trim() !== '');
+}
+
+function conversationPreview(messages) {
+  const list = normalizeMessages(messages);
+  const last = list[list.length - 1];
+  if (!last) return '';
+  const text = last.content.replace(/\s+/g, ' ').trim();
+  const body = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  return last.role === 'user' ? `我：${body}` : body;
+}
+
 function normalizeConversationSettings(value) {
   const source = value && typeof value === 'object' ? value : {};
   return {
@@ -281,9 +301,25 @@ class ConversationStore {
   load(id) {
     if (typeof id !== 'string' || !/^[a-z0-9-]{8,80}$/i.test(id)) throw new Error('会话 id 无效');
     const file = path.join(this.baseDir, `${id}.json`);
-    const conversation = JSON.parse(fs.readFileSync(file, 'utf8'));
+    let raw;
+    try {
+      raw = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw new Error('找不到这个联系人的聊天记录');
+      throw error;
+    }
+    let conversation;
+    try {
+      conversation = JSON.parse(raw);
+    } catch (_) {
+      throw new Error('联系人的聊天记录文件已损坏');
+    }
     if (conversation.id !== id) throw new Error('会话文件与 id 不匹配');
-    return { ...conversation, settings: normalizeConversationSettings(conversation.settings) };
+    return {
+      ...conversation,
+      messages: normalizeMessages(conversation.messages),
+      settings: normalizeConversationSettings(conversation.settings),
+    };
   }
 
   create(title = '新对话', settings = {}) {
@@ -291,26 +327,49 @@ class ConversationStore {
     const now = new Date().toISOString();
     const conversation = {
       id,
-      title: String(title || '新对话'),
+      title: String(title || '新对话').trim().slice(0, 60) || '新对话',
       createdAt: now,
       updatedAt: now,
       messages: [],
       settings: normalizeConversationSettings(settings),
     };
-    fs.writeFileSync(path.join(this.baseDir, `${id}.json`), `${JSON.stringify(conversation, null, 2)}\n`, { mode: 0o600 });
-    this.writeIndex([conversationMeta(conversation), ...this.readIndex()]);
+    this.saveConversation(conversation);
     return conversation;
   }
 
   append(id, message) {
     const conversation = this.load(id);
+    const content = String(message?.content ?? '');
+    if (!content.trim()) return conversation;
     conversation.messages.push({
-      role: message.role,
-      content: String(message.content || ''),
+      role: message.role === 'user' ? 'user' : 'assistant',
+      content,
     });
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
     return conversation;
+  }
+
+  // 只清空聊天记录，保留联系人本身的头像、模型、人设与号码。
+  clearMessages(id) {
+    const conversation = this.load(id);
+    conversation.messages = [];
+    conversation.updatedAt = new Date().toISOString();
+    this.saveConversation(conversation);
+    return conversation;
+  }
+
+  clearAllMessages() {
+    let cleared = 0;
+    for (const item of this.readIndex()) {
+      try {
+        this.clearMessages(item.id);
+        cleared += 1;
+      } catch (_) {
+        // 单个损坏的会话不应阻断整体清理。
+      }
+    }
+    return { cleared };
   }
 
   rename(id, title) {
@@ -329,26 +388,33 @@ class ConversationStore {
   }
 
   saveConversation(conversation) {
-    fs.writeFileSync(path.join(this.baseDir, `${conversation.id}.json`), `${JSON.stringify(conversation, null, 2)}\n`, { mode: 0o600 });
+    const file = path.join(this.baseDir, `${conversation.id}.json`);
+    const temporary = `${file}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(conversation, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, file);
     const index = this.readIndex().filter(item => item.id !== conversation.id);
     this.writeIndex([conversationMeta(conversation), ...index]);
   }
 
   delete(id) {
-    const conversation = this.load(id);
-    fs.rmSync(path.join(this.baseDir, `${conversation.id}.json`));
+    if (typeof id !== 'string' || !/^[a-z0-9-]{8,80}$/i.test(id)) throw new Error('会话 id 无效');
+    fs.rmSync(path.join(this.baseDir, `${id}.json`), { force: true });
     this.writeIndex(this.readIndex().filter(item => item.id !== id));
+    return { ok: true };
   }
 }
 
 function conversationMeta(conversation) {
   const settings = normalizeConversationSettings(conversation.settings);
+  const messages = normalizeMessages(conversation.messages);
   return {
     id: conversation.id,
     title: conversation.title,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
-    messageCount: conversation.messages?.length || 0,
+    messageCount: messages.length,
+    preview: conversationPreview(messages),
+    settings,
     ...settings,
   };
 }
@@ -361,9 +427,11 @@ module.exports = {
   DEFAULT_PERSONA,
   ConversationStore,
   buildSystemPrompt,
+  conversationPreview,
   createSseParser,
   loadPersona,
   normalizeConversationSettings,
+  normalizeMessages,
   readTones,
   recallMemories,
   storeMemory,

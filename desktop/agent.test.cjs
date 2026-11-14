@@ -7,7 +7,9 @@ const test = require('node:test');
 const {
   ConversationStore,
   buildSystemPrompt,
+  conversationPreview,
   createSseParser,
+  normalizeMessages,
   recallMemories,
   storeMemory,
 } = require('./agent.cjs');
@@ -49,6 +51,77 @@ test('conversation store supports create, append, load, rename, list, and delete
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('each contact keeps its own history and settings survive clearing messages', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'earshot-agent-'));
+  try {
+    const store = new ConversationStore(directory);
+    const alice = store.create('小满', { avatar: 'preset-2', number: '13800138000' });
+    const bob = store.create('阿年', { avatar: 'preset-3' });
+    store.append(alice.id, { role: 'user', content: '我是给小满的' });
+    store.append(alice.id, { role: 'assistant', content: '收到' });
+    store.append(bob.id, { role: 'user', content: '我是给阿年的' });
+
+    // 两个联系人的记录互不污染。
+    assert.deepEqual(store.load(alice.id).messages.map(item => item.content), ['我是给小满的', '收到']);
+    assert.deepEqual(store.load(bob.id).messages.map(item => item.content), ['我是给阿年的']);
+
+    const aliceMeta = store.list().find(item => item.id === alice.id);
+    assert.equal(aliceMeta.messageCount, 2);
+    assert.equal(aliceMeta.preview, '收到');
+    assert.equal(aliceMeta.avatar, 'preset-2');
+
+    const cleared = store.clearMessages(alice.id);
+    assert.deepEqual(cleared.messages, []);
+    assert.equal(cleared.settings.avatar, 'preset-2');
+    assert.equal(cleared.settings.number, '13800138000');
+    assert.equal(cleared.title, '小满');
+    // 清空一个联系人不影响另一个。
+    assert.equal(store.load(bob.id).messages.length, 1);
+    assert.equal(store.list().find(item => item.id === alice.id).messageCount, 0);
+
+    const result = store.clearAllMessages();
+    assert.equal(result.cleared, 2);
+    assert.equal(store.load(bob.id).messages.length, 0);
+    assert.equal(store.list().every(item => item.messageCount === 0), true);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('store rejects unusable ids, repairs bad records, and reports readable errors', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'earshot-agent-'));
+  try {
+    const store = new ConversationStore(directory);
+    assert.throws(() => store.load('../../etc/passwd'), /会话 id 无效/);
+    assert.throws(() => store.delete('bad id'), /会话 id 无效/);
+    assert.throws(() => store.load('aaaaaaaa-bbbb'), /找不到这个联系人的聊天记录/);
+
+    const created = store.create('脏数据');
+    const file = path.join(directory, `${created.id}.json`);
+    fs.writeFileSync(file, JSON.stringify({
+      ...created,
+      messages: [null, { role: 'tool', content: '  ' }, { role: 'user', content: '保留我' }],
+    }));
+    assert.deepEqual(store.load(created.id).messages, [{ role: 'user', content: '保留我' }]);
+
+    fs.writeFileSync(file, '{not json');
+    assert.throws(() => store.load(created.id), /已损坏/);
+    // 删除已损坏的会话仍然可用，不会卡住界面。
+    store.delete(created.id);
+    assert.deepEqual(store.list(), []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('message normalization and preview stay safe for list rendering', () => {
+  assert.deepEqual(normalizeMessages(undefined), []);
+  assert.deepEqual(normalizeMessages([{ role: 'user', content: 123 }]), [{ role: 'user', content: '123' }]);
+  assert.equal(conversationPreview([]), '');
+  assert.equal(conversationPreview([{ role: 'user', content: '换行\n也要压平' }]), '我：换行 也要压平');
+  assert.equal(conversationPreview([{ role: 'assistant', content: 'x'.repeat(60) }]).length, 41);
 });
 
 test('disabled memory performs no requests', async () => {

@@ -88,10 +88,18 @@
     onState: () => () => {},
     agent: {
       tones: async () => ({ tones: [{ id: 'gentle', name: '温和', systemPrompt: '使用自然、清楚的中文回答。' }], activeToneId: 'gentle' }),
-      conversationList: async () => memory.conversations,
+      conversationList: async () => memory.conversations.map(item => ({
+        ...item,
+        messageCount: item.messages.length,
+        preview: item.messages.length
+          ? (item.messages[item.messages.length - 1].role === 'user' ? `我：${item.messages[item.messages.length - 1].content}` : item.messages[item.messages.length - 1].content)
+          : '',
+      })),
       conversationLoad: async id => memory.conversations.find(item => item.id === id) || memory.conversations[0],
       conversationNew: async title => { const item = { id: `mock-${Date.now()}`, title: title || '新对话', settings: { number: '', avatar: '', model: '', toneId: '', style: '' }, messages: [] }; memory.conversations.unshift(item); return item; },
       conversationDelete: async id => { memory.conversations = memory.conversations.filter(item => item.id !== id); return { ok: true }; },
+      conversationClear: async id => { const item = memory.conversations.find(row => row.id === id); if (item) item.messages = []; return item; },
+      conversationClearAll: async () => { memory.conversations.forEach(item => { item.messages = []; }); return { cleared: memory.conversations.length }; },
       conversationRename: async input => { const item = memory.conversations.find(row => row.id === input.id); if (item) item.title = input.title; return item; },
       conversationUpdate: async (id, patch) => {
         const item = memory.conversations.find(row => row.id === id);
@@ -100,7 +108,7 @@
         item.settings = { ...(item.settings || {}), ...patch };
         return item;
       },
-      chatStart: async (id, text) => { const item = memory.conversations.find(row => row.id === id); item?.messages.push({ role: 'assistant', content: `浏览器预览回复：${text}` }); return { ticketId: `mock-ticket-${Date.now()}` }; },
+      chatStart: async (id, text) => { const item = memory.conversations.find(row => row.id === id); item?.messages.push({ role: 'user', content: text }, { role: 'assistant', content: `浏览器预览回复：${text}` }); return { ticketId: `mock-ticket-${Date.now()}` }; },
       chatAbort: async () => ({ ok: true }),
       onEvent: () => () => {},
       memoryGet: async () => ({ memoryBaseUrl: '', memoryEnabled: false }),

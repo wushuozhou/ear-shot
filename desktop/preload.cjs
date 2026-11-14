@@ -93,6 +93,11 @@ contextBridge.exposeInMainWorld('desktop', {
       if (typeof id !== 'string') throw new TypeError('会话 id 必须是字符串');
       return ipcRenderer.invoke('agent:conversation-delete', id);
     },
+    conversationClear: id => {
+      if (typeof id !== 'string') throw new TypeError('会话 id 必须是字符串');
+      return ipcRenderer.invoke('agent:conversation-clear', id);
+    },
+    conversationClearAll: () => ipcRenderer.invoke('agent:conversation-clear-all'),
     conversationRename: (id, title) => {
       if (typeof id !== 'string' || typeof title !== 'string') throw new TypeError('重命名参数无效');
       return ipcRenderer.invoke('agent:conversation-rename', { id, title });

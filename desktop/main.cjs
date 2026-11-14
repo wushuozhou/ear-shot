@@ -137,6 +137,14 @@ function activeLlmProvider(preferredId = '') {
   };
 }
 
+function abortConversationTickets(conversationId) {
+  for (const [ticketId, ticket] of agentTickets) {
+    if (ticket.conversationId !== conversationId) continue;
+    ticket.controller.abort();
+    agentTickets.delete(ticketId);
+  }
+}
+
 function startAgentChat(conversationId, userText) {
   const ticketId = `ticket-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const controller = new AbortController();
@@ -198,6 +206,15 @@ function startAgentChat(conversationId, userText) {
           text: `用户：${userText}\n助手：${assistantText}`,
         });
         agentEvent({ type: 'done', conversationId, ticketId, content: assistantText });
+        return;
+      }
+      // 出错或被中断时也把已经收到的半句话存下来，避免聊天记录出现空洞。
+      if (assistantText) {
+        try {
+          conversationStore.append(conversationId, { role: 'assistant', content: assistantText });
+        } catch (_) {
+          // 会话可能已被删除，忽略。
+        }
       }
     } catch (error) {
       agentEvent({ type: 'error', conversationId, ticketId, message: error.message || '对话请求失败' });
@@ -627,8 +644,21 @@ function registerIpc() {
   ipcMain.handle('agent:conversation-new', (_event, title) => conversationStore.create(typeof title === 'string' ? title : '新对话'));
   ipcMain.handle('agent:conversation-delete', (_event, id) => {
     if (typeof id !== 'string') throw new Error('会话 id 无效');
+    abortConversationTickets(id);
     conversationStore.delete(id);
     return { ok: true };
+  });
+  ipcMain.handle('agent:conversation-clear', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('会话 id 无效');
+    abortConversationTickets(id);
+    return conversationStore.clearMessages(id);
+  });
+  ipcMain.handle('agent:conversation-clear-all', () => {
+    for (const [ticketId, ticket] of agentTickets) {
+      ticket.controller.abort();
+      agentTickets.delete(ticketId);
+    }
+    return conversationStore.clearAllMessages();
   });
   ipcMain.handle('agent:conversation-rename', (_event, input) => {
     if (!input || typeof input.id !== 'string' || typeof input.title !== 'string') throw new Error('重命名参数无效');
@@ -638,7 +668,8 @@ function registerIpc() {
     if (!input || typeof input.id !== 'string' || !input.patch || typeof input.patch !== 'object') {
       throw new Error('会话设置参数无效');
     }
-    const patch = input.patch;
+    // 不要就地改调用方传来的对象，复制一份再做校验与归一化。
+    const patch = { ...input.patch };
     if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim())) {
       throw new Error('联系人名称不能为空');
     }

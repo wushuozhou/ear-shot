@@ -173,12 +173,25 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .conversation-list-head strong { font-size: 13px; }
 .conversation-items { min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 4px; }
-.conversation-item-row { position: relative; display: flex; align-items: stretch; overflow: hidden; border-radius: 7px; background: var(--danger); }
-.conversation-item { position: relative; z-index: 1; width: 100%; overflow: hidden; padding: 10px 9px; border: 0; border-radius: 7px; color: var(--muted); background: var(--panel); text-align: left; text-overflow: ellipsis; white-space: nowrap; transform: translateX(var(--swipe-x, 0)); transition: transform .2s ease; }
+/* iOS 侧滑：操作按钮垫在行的下层，只有前景行左移才露出来。
+   前景行必须保持不透明背景，否则会透出底下的按钮。 */
+/* iOS 侧滑：操作按钮垫在行下层，前景行收窄把它们"让"出来。
+   用收窄宽度而不是整体平移，这样头像和名字始终留在原位（和 iOS 原生一致），
+   窄侧栏下也不会把头像推出可视区。前景行必须不透明，否则会透出底下的按钮。 */
+.conversation-item-row { position: relative; display: flex; align-items: stretch; overflow: hidden; border-radius: 7px; background: var(--panel); }
+.conversation-item { position: relative; z-index: 1; width: calc(100% - var(--swipe-x, 0px)); overflow: hidden; padding: 10px 9px; border: 0; border-radius: 7px; color: var(--muted); background: var(--panel); text-align: left; text-overflow: ellipsis; white-space: nowrap; transition: width .25s cubic-bezier(.25, .46, .45, .94); }
 .conversation-item:hover, .conversation-item.active { color: var(--text); background: var(--panel-2); }
 .conversation-item-row .conversation-item { min-width: 0; }
-.conversation-item-row.expanded .conversation-item { transform: translateX(-82px); }
-.conversation-item-delete { position: absolute; inset: 0 0 0 auto; width: 82px; padding: 5px; border: 0; color: #fff; background: var(--danger); font-size: 12px; }
+.conversation-item-row.expanded .conversation-item { width: calc(100% - var(--swipe-open, 88px)); }
+/* z-index 0：压在前景行下面；未展开时不可点，避免隔着行误触。 */
+.conversation-item-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; pointer-events: none; }
+.conversation-item-row.expanded .conversation-item-actions,
+.conversation-item-row.swiping .conversation-item-actions { pointer-events: auto; }
+.conversation-item-action { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 44px; padding: 4px 2px; border: 0; color: #fff; background: var(--muted); font-size: 10px; line-height: 1.1; text-align: center; cursor: pointer; }
+.conversation-item-action svg { width: 15px; height: 15px; }
+.conversation-item-action:hover { filter: brightness(1.08); }
+.conversation-item-delete { background: var(--danger); }
+.conversation-item-row.swiping .conversation-item { transition: none; }
 .conversation-empty { padding: 18px 8px; color: var(--faint); font-size: 12px; line-height: 1.6; }
 .conversation-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .conversation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -371,3 +384,4 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .settings-contact-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .settings-contact-text strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-contact-text span { color: var(--muted); font-size: 12px; }
+.settings-contact-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
