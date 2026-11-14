@@ -220,6 +220,19 @@ async function testMemoryConnection({ memoryBaseUrl, fetchImpl = globalThis.fetc
   }
 }
 
+const AVATAR_VALUE = /^(?:preset-[1-6]|data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)$/;
+
+function normalizeConversationSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    number: String(source.number || '').replace(/\D/g, '').slice(0, 12),
+    model: String(source.model || '').slice(0, 80),
+    toneId: String(source.toneId || '').slice(0, 60),
+    avatar: AVATAR_VALUE.test(String(source.avatar || '')) ? String(source.avatar) : '',
+    style: String(source.style || '').slice(0, 200),
+  };
+}
+
 function loadPersona(rootDir) {
   const candidates = [
     path.join(rootDir, 'persona.md'),
@@ -265,13 +278,20 @@ class ConversationStore {
     const file = path.join(this.baseDir, `${id}.json`);
     const conversation = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (conversation.id !== id) throw new Error('会话文件与 id 不匹配');
-    return conversation;
+    return { ...conversation, settings: normalizeConversationSettings(conversation.settings) };
   }
 
-  create(title = '新对话') {
+  create(title = '新对话', settings = {}) {
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date().toISOString();
-    const conversation = { id, title: String(title || '新对话'), createdAt: now, updatedAt: now, messages: [] };
+    const conversation = {
+      id,
+      title: String(title || '新对话'),
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      settings: normalizeConversationSettings(settings),
+    };
     fs.writeFileSync(path.join(this.baseDir, `${id}.json`), `${JSON.stringify(conversation, null, 2)}\n`, { mode: 0o600 });
     this.writeIndex([conversationMeta(conversation), ...this.readIndex()]);
     return conversation;
@@ -289,8 +309,15 @@ class ConversationStore {
   }
 
   rename(id, title) {
+    return this.update(id, { title });
+  }
+
+  update(id, patch = {}) {
     const conversation = this.load(id);
-    conversation.title = String(title || '新对话').trim() || '新对话';
+    if (typeof patch.title === 'string') {
+      conversation.title = patch.title.trim().slice(0, 60) || conversation.title;
+    }
+    conversation.settings = normalizeConversationSettings({ ...conversation.settings, ...patch });
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
     return conversation;
@@ -310,12 +337,14 @@ class ConversationStore {
 }
 
 function conversationMeta(conversation) {
+  const settings = normalizeConversationSettings(conversation.settings);
   return {
     id: conversation.id,
     title: conversation.title,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages?.length || 0,
+    ...settings,
   };
 }
 
@@ -329,6 +358,7 @@ module.exports = {
   buildSystemPrompt,
   createSseParser,
   loadPersona,
+  normalizeConversationSettings,
   readTones,
   recallMemories,
   storeMemory,

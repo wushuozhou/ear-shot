@@ -48,3 +48,32 @@ dialog label.row { display:flex; gap:10px; align-items:flex-start; }
 dialog input[type=password] { display:block; width:100%; margin-top:6px; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.06); color:var(--ink); font:inherit; }
 dialog menu { padding:0; margin:18px 0 0; display:flex; justify-content:flex-end; }
 dialog menu button { border:0; border-radius:10px; padding:9px 18px; background:var(--ink); color:var(--bg1); }
+
+/* 头像与电话式联系人 */
+.avatar { width:72px; height:72px; display:block; border-radius:50%; background-color:rgba(255,255,255,.12); background-position:center; background-size:cover; box-shadow:0 0 0 1px rgba(255,255,255,.16), 0 10px 30px rgba(0,0,0,.28); }
+.avatar.preset-1 { background-image:linear-gradient(135deg,#FF6B5A,#7D2E2E); }
+.avatar.preset-2 { background-image:linear-gradient(135deg,#2563EB,#172554); }
+.avatar.preset-3 { background-image:linear-gradient(135deg,#E0A458,#6B3F14); }
+.avatar.preset-4 { background-image:linear-gradient(135deg,#A855F7,#3B0764); }
+.avatar.preset-5 { background-image:linear-gradient(135deg,#14B8A6,#134E4A); }
+.avatar.preset-6 { background-image:linear-gradient(135deg,#F472B6,#831843); }
+#home .contact { display:flex; flex-direction:column; align-items:center; gap:8px; margin-bottom:4px; }
+#home-avatar { width:104px; height:104px; }
+#home .contact h1 { font-size:clamp(30px,8vw,44px); font-weight:400; }
+#home-number { margin:0; color:var(--dim); font-size:13px; letter-spacing:.1em; font-variant-numeric:tabular-nums; }
+#home .call-btn { margin-top:26px; }
+#incall header .avatar { width:74px; height:74px; margin-bottom:10px; }
+#incall header .number { color:var(--dim); font-size:12px; letter-spacing:.1em; font-variant-numeric:tabular-nums; }
+#incall header #clock { margin-top:5px; }
+#wave[hidden] { display:none; }
+#incall footer { gap:28px; }
+#keyboard svg { fill:none; stroke:var(--ink); stroke-width:1.6; stroke-linecap:round; }
+#keyboard.on { background:var(--ink); }
+#keyboard.on svg { stroke:var(--bg1); }
+
+/* 通话中打字聊天 */
+#chat { width:100%; max-width:520px; display:flex; align-items:flex-end; gap:8px; margin-top:10px; padding:10px; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:rgba(255,255,255,.07); }
+#chat[hidden] { display:none; }
+#chat textarea { flex:1; min-height:40px; max-height:120px; padding:9px 12px; border:1px solid rgba(255,255,255,.18); border-radius:12px; color:var(--ink); background:rgba(0,0,0,.18); font:inherit; font-size:14px; resize:none; }
+#chat textarea:focus { outline:none; border-color:var(--her); }
+#chat button { flex:0 0 auto; padding:9px 16px; border:0; border-radius:12px; color:#3A1B17; background:var(--her); font-weight:600; }

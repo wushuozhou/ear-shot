@@ -19,7 +19,45 @@ const store = {
 const auth = (extra = {}) => ({ ...extra, ...(store.get('token') ? { Authorization: 'Bearer ' + store.get('token') } : {}) });
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const FILLER_GAP_MS = 1500, FILLER_SPACING_MS = 6000, FIRST_SPEECH_TIMEOUT_MS = 30000;
-let INFO = { name: 'Earshot', lang: 'en', needsToken: false };
+const AVATARS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'preset-6'];
+const CONTACT = { name: '', number: '', avatar: 'preset-1', model: '', style: '' };
+let SHOW_WAVE = true;
+let INFO = { name: 'Earshot', lang: 'zh', needsToken: false };
+
+function formatNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length === 11) return `${digits.slice(0, 3)} ${digits.slice(3, 7)} ${digits.slice(7)}`;
+  return digits.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+}
+
+function paintAvatar(node, value) {
+  if (!node) return;
+  node.classList.remove(...AVATARS);
+  node.style.backgroundImage = '';
+  if (String(value || '').startsWith('data:image/')) {
+    node.style.backgroundImage = `url("${value}")`;
+    return;
+  }
+  node.classList.add(AVATARS.includes(value) ? value : 'preset-1');
+}
+
+function applyContact(detail) {
+  if (!detail || typeof detail !== 'object') return;
+  if (typeof detail.name === 'string' && detail.name.trim()) CONTACT.name = detail.name.trim();
+  if (typeof detail.number === 'string') CONTACT.number = detail.number.replace(/\D/g, '').slice(0, 12);
+  if (typeof detail.avatar === 'string' && detail.avatar) CONTACT.avatar = detail.avatar;
+  if (typeof detail.model === 'string') CONTACT.model = detail.model;
+  if (typeof detail.style === 'string') CONTACT.style = detail.style;
+  if (typeof detail.wave === 'boolean') SHOW_WAVE = detail.wave;
+  const label = CONTACT.name || INFO.name;
+  document.querySelectorAll('.name').forEach(node => { node.textContent = label; });
+  document.title = label;
+  paintAvatar($('#home-avatar'), CONTACT.avatar);
+  paintAvatar($('#call-avatar'), CONTACT.avatar);
+  $('#home-number').textContent = CONTACT.number ? formatNumber(CONTACT.number) : '未设置号码';
+  $('#call-number').textContent = CONTACT.number ? formatNumber(CONTACT.number) : '';
+  $('#wave').hidden = !SHOW_WAVE;
+}
 
 class Call {
   constructor(ui) {
@@ -33,6 +71,7 @@ class Call {
     this.herLevel = 0; this.meLevel = 0;
     this.useDictation = !!SR && store.get('dictation') === '1';
     this.barge = store.get('barge') === '1';
+    this.typing = false;     // 打字模式：暂停麦克风与语音识别，只走文字 + 语音回复
   }
 
   log(...a) { if (store.get('debug') === '1') console.log('[call]', ((performance.now() - this.t0) / 1000).toFixed(2), ...a); }
@@ -47,7 +86,7 @@ class Call {
     this.t0 = performance.now(); this.ended = false;
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    } catch (e) { this.ui.error('Microphone is blocked. Allow it in the browser settings and call again.'); this.ui.ended(); return; }
+    } catch (e) { this.ui.error('麦克风被拦住了，请在浏览器设置里允许麦克风后再试一次。'); this.ui.ended(); return; }
     const src = this.ctx.createMediaStreamSource(this.stream);
     this.analyser = this.ctx.createAnalyser(); this.analyser.fftSize = 1024; src.connect(this.analyser);
     // Safari stops rendering a capture graph that goes nowhere; route it into a silent gain.
@@ -63,13 +102,29 @@ class Call {
 
   hangup() {
     if (this.ended) return;
-    this.ended = true; this.gen++;
+    this.ended = true; this.gen++; this.typing = false;
     clearTimeout(this.idleTimer); clearTimeout(this.byeTimer); clearTimeout(this.graceTimer); clearTimeout(this.patientTimer);
     this.abort?.(); this.stopAudio(); this.stopDictation();
     try { this.rec?.stop(); } catch { /* already stopped */ }
     this.stream?.getTracks().forEach(t => t.stop());
     this.ctx?.close().catch(() => {});
     this.setPhase('ended'); this.ui.ended();
+  }
+
+  // ── 打字模式：不录麦克风、不调用 STT，回复仍然正常思考并念出来 ──
+  beginTyping() {
+    if (this.ended) return;
+    this.typing = true;
+    this.stopDictation();
+    try { this.rec?.stop(); } catch { /* already stopped */ }
+    this.rec = null; this.seg = null; this.pieces = []; this.ticket = (this.ticket || 0) + 1;
+    clearTimeout(this.idleTimer); clearTimeout(this.byeTimer);
+    this.setPhase('typing');
+  }
+  endTyping() {
+    this.typing = false;
+    if (this.ended) return;
+    if (this.phase === 'typing') this.listen();
   }
 
   // ── the microphone loop: runs every frame, decides what her sound means in the current phase ──
@@ -82,7 +137,7 @@ class Call {
     const me = new Uint8Array(this.meAnalyser.fftSize); this.meAnalyser.getByteTimeDomainData(me);
     let s2 = 0; for (const v of me) s2 += (v - 128) ** 2; this.meLevel = Math.sqrt(s2 / me.length);
 
-    if (!this.muted) {
+    if (!this.typing && !this.muted) {
       const loud = this.gate.loud(rms, now);
       if (this.phase === 'listen' && !this.useDictation) this.vadListen(loud, now);
       else if ((this.phase === 'think' || this.phase === 'recognize') && !this.fillerPlaying) {
@@ -133,7 +188,7 @@ class Call {
     const t0 = performance.now();
     const res = await fetch('/api/stt', { method: 'POST', headers: auth({ 'Content-Type': blob.type }), body: blob });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(j.error || 'Transcription failed');
+    if (!res.ok) throw new Error(j.error || '转写失败');
     this.log('transcribed in', Math.round(performance.now() - t0), 'ms:', j.text);
     return j.text || '';
   }
@@ -154,7 +209,7 @@ class Call {
       clearTimeout(this.dictTimer);
       this.dictTimer = setTimeout(() => { if (this.phase === 'listen' && this.dictated) { const t = this.dictated; this.dictated = ''; done = ''; this.submit(t, { byVoice: false }); } }, silenceFor(text));
     };
-    rec.onerror = e => { if (/not-allowed|network|service-not-allowed/.test(e.error)) { this.useDictation = false; this.ui.hint('Browser dictation unavailable, switching to recording'); this.stopDictation(); this.listen(); } };
+    rec.onerror = e => { if (/not-allowed|network|service-not-allowed/.test(e.error)) { this.useDictation = false; this.ui.hint('浏览器听写不可用，已切换为录音转文字'); this.stopDictation(); this.listen(); } };
     rec.onend = () => { if (this.sr === rec) { this.sr = null; if (this.phase === 'listen' || this.phase === 'think') this.startDictation(); } };
     this.sr = rec; rec.start();
   }
@@ -162,6 +217,7 @@ class Call {
 
   listen() {
     if (this.ended) return;
+    if (this.typing) { this.setPhase('typing'); return; }
     this.setPhase(this.muted ? 'muted' : 'listen');
     if (this.useDictation) { this.dictated = ''; this.startDictation(); }
     else this.newSegment();
@@ -200,14 +256,14 @@ class Call {
     const flush = () => { clearTimeout(pendTimer); if (pend.length && gen === this.gen) { const j = joinSpeech(pend); if (j.length <= 140) this.say(j, gen); else pend.forEach(p => this.say(p, gen)); } pend = []; };
     // First sentence goes out alone and immediately; later ones are paired up (fewer, longer voice requests).
     const collect = s => { if (!hasSpeech(s)) return; if (first) { first = false; clearTimeout(this.firstTimer); this.say(s, gen); return; } pend.push(s); if (pend.length >= 2) flush(); else pendTimer = setTimeout(flush, 350); };
-    this.firstTimer = setTimeout(() => { if (gen === this.gen && first) { this.log('no reply in time'); this.gen++; this.abort?.(); this.ui.hint('That took too long. Go on, I\'m listening.'); this.listen(); } }, FIRST_SPEECH_TIMEOUT_MS);
+    this.firstTimer = setTimeout(() => { if (gen === this.gen && first) { this.log('no reply in time'); this.gen++; this.abort?.(); this.ui.hint('等得有点久，你继续说，我在听。'); this.listen(); } }, FIRST_SPEECH_TIMEOUT_MS);
     const slow = setTimeout(() => { if (gen === this.gen && !this.firstSound) this.maybeFiller(gen); }, 2500);
     let flags = {};
     try {
       const ac = new AbortController(); this.abort = () => ac.abort();
       const res = await fetch('/api/turn', { method: 'POST', signal: ac.signal, headers: auth({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ text, history: this.history.slice(-30), mayContinue, idle, night: isNight() }) });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `No answer (${res.status})`); }
+        body: JSON.stringify({ text, history: this.history.slice(-30), mayContinue, idle, night: isNight(), model: CONTACT.model || '', style: CONTACT.style || '' }) });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `没有回复（${res.status}）`); }
       for await (const { event, data } of streamEvents(res.body)) {
         if (gen !== this.gen) return;
         if (event === 'delta') {
@@ -218,7 +274,7 @@ class Call {
           out.forEach(collect);
         }
         if (event === 'done') flags = data;
-        if (event === 'error') throw new Error(data.error || 'No answer');
+        if (event === 'error') throw new Error(data.error || '没有回复');
       }
     } catch (e) {
       clearTimeout(slow); clearTimeout(this.firstTimer);
@@ -261,7 +317,7 @@ class Call {
       for (let attempt = 0; ; attempt++) {
         try {
           const res = await fetch('/api/tts', { method: 'POST', signal: ac.signal, headers: auth({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text }) });
-          if (!res.ok) { const j = await res.json().catch(() => ({})); if (res.status >= 500 && attempt < 2) throw new TypeError('retry'); throw new Error(j.error || 'The voice did not come through'); }
+          if (!res.ok) { const j = await res.json().catch(() => ({})); if (res.status >= 500 && attempt < 2) throw new TypeError('retry'); throw new Error(j.error || '声音没有成功返回'); }
           const buf = await res.arrayBuffer();
           return await this.ctx.decodeAudioData(buf);
         } catch (e) {
@@ -311,6 +367,7 @@ class Call {
     if (this.ended) return;
     this.ui.heard('');
     if (this.hangAfter) { const why = this.hangAfter; this.hangAfter = null; this.startGrace(why); }
+    if (this.typing) { this.setPhase('typing'); return; }
     this.listen();
   }
 
@@ -350,11 +407,11 @@ class Call {
   heardHer() { this.quietSince = 0; this.idleStage = 0; clearTimeout(this.patientTimer); if (this.pendingHang) this.cancelGrace(); this.armIdle(); }
   armIdle() {
     clearTimeout(this.idleTimer); clearTimeout(this.byeTimer);
-    if (this.ended || this.pendingHang || !(this.phase === 'listen' || this.phase === 'muted')) return;
+    if (this.ended || this.typing || this.pendingHang || !(this.phase === 'listen' || this.phase === 'muted')) return;
     const plan = idlePlan({ night: isNight(), wait: this.waitMode, stay: this.stay, muted: this.muted });
     const since = (this.quietSince ||= Date.now()), left = ms => Math.max(0, ms - (Date.now() - since));
     const step = plan.steps[this.idleStage || 0];
-    const quiet = () => !this.ended && (this.phase === 'listen' || this.phase === 'muted') && !this.seg?.spoke && !this.prefix;
+    const quiet = () => !this.ended && !this.typing && (this.phase === 'listen' || this.phase === 'muted') && !this.seg?.spoke && !this.prefix;
     if (step) this.idleTimer = setTimeout(() => {
       if (!quiet()) return;
       this.idleStage = (this.idleStage || 0) + 1; this.log('idle', step.kind);
@@ -387,12 +444,12 @@ class Call {
 const ui = {
   phase(p) {
     document.body.dataset.phase = p;
-    $('#status').textContent = { listen: 'Listening', recognize: 'Listening', think: 'Thinking', speak: 'Speaking', muted: 'Muted', ended: 'Call ended' }[p] || '';
+    $('#status').textContent = { listen: '正在听', recognize: '正在听', think: '正在思考', speak: '正在说话', muted: '已静音', typing: '打字中', ended: '通话结束' }[p] || '';
   },
   heard(t) { $('#heard').textContent = t; },
   hint(t) { $('#hint').textContent = t; clearTimeout(ui._h); if (t) ui._h = setTimeout(() => { $('#hint').textContent = ''; }, 4000); },
   error(t) { $('#error').textContent = t; },
-  timing(s) { $('#timing').textContent = `first sound ${s.toFixed(1)}s`; },
+  timing(s) { $('#timing').textContent = `首字 ${s.toFixed(1)}s`; },
   line(who, text) {
     const el = document.createElement('p'); el.className = who; el.textContent = text;
     $('#lines').append(el); while ($('#lines').children.length > 6) $('#lines').firstChild.remove();
@@ -401,13 +458,22 @@ const ui = {
   },
   unline(who) { const all = [...$('#lines').querySelectorAll('.' + who)]; all.at(-1)?.remove(); },
   grace(on) { $('#grace').hidden = !on; },
-  ended() { document.body.classList.remove('in-call'); clearInterval(ui._clock); },
+  ended() {
+    document.body.classList.remove('in-call');
+    clearInterval(ui._clock);
+    $('#chat').hidden = true;
+    $('#keyboard').classList.remove('on');
+    $('#keyboard').setAttribute('aria-pressed', 'false');
+  },
 };
 
 let call = null;
 async function startCall() {
   if (INFO.needsToken && !store.get('token')) { openSettings(); $('#token').focus(); return; }
-  document.body.classList.add('in-call'); $('#lines').innerHTML = ''; ui.error(''); ui.heard(''); $('#timing').textContent = ''; ui.grace(false);
+  document.body.classList.add('in-call');
+  $('#lines').innerHTML = ''; ui.error(''); ui.heard(''); $('#timing').textContent = ''; ui.grace(false);
+  $('#chat').hidden = true; $('#chat-input').value = '';
+  $('#keyboard').classList.remove('on'); $('#keyboard').setAttribute('aria-pressed', 'false');
   call = new Call(ui);
   const t0 = Date.now();
   ui._clock = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $('#clock').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }, 500);
@@ -417,7 +483,10 @@ async function startCall() {
 
 // Two light trails, like the film: hers in coral, ours in white, scrolling right to left.
 function drawWave() {
-  const cv = $('#wave'), g = cv.getContext('2d'), her = [], me = [];
+  const cv = $('#wave');
+  if (!SHOW_WAVE) { cv.hidden = true; return; }
+  cv.hidden = false;
+  const g = cv.getContext('2d'), her = [], me = [];
   const frame = () => {
     if (!call || call.ended) return;
     const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = cv.clientHeight * devicePixelRatio;
@@ -450,4 +519,49 @@ $('#mute').addEventListener('click', e => { const m = call?.toggleMute(); e.curr
 $('#wave').addEventListener('click', () => call?.interrupt('tap'));
 $('#grace').addEventListener('click', () => call?.cancelGrace());
 
-fetch('/api/info').then(r => r.json()).then(j => { INFO = j; document.querySelectorAll('.name').forEach(e => { e.textContent = j.name; }); document.title = j.name; }).catch(() => {});
+// 打字聊天：打开后暂停麦克风与 STT，只把文字发给模型，回复照常朗读。
+function setChat(open) {
+  if (!call || call.ended) return;
+  $('#chat').hidden = !open;
+  $('#keyboard').classList.toggle('on', open);
+  $('#keyboard').setAttribute('aria-pressed', String(open));
+  if (open) {
+    call.beginTyping();
+    $('#chat-input').focus();
+  } else {
+    call.endTyping();
+  }
+}
+
+function sendTyped() {
+  const input = $('#chat-input');
+  const text = input.value.trim();
+  if (!text || !call || call.ended) return;
+  input.value = '';
+  call.beginTyping();
+  call.submit(text, { byVoice: false });
+  input.focus();
+}
+
+$('#keyboard').addEventListener('click', () => setChat($('#chat').hidden));
+$('#chat-send').addEventListener('click', sendTyped);
+$('#chat-input').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendTyped();
+  }
+});
+
+window.earshotHangup = () => call?.hangup();
+window.addEventListener('earshot:contact', event => applyContact(event.detail));
+
+paintAvatar($('#home-avatar'), 'preset-1');
+paintAvatar($('#call-avatar'), 'preset-1');
+
+fetch('/api/info').then(r => r.json()).then(j => {
+  INFO = j;
+  if (!CONTACT.name) {
+    document.querySelectorAll('.name').forEach(e => { e.textContent = j.name; });
+    document.title = j.name;
+  }
+}).catch(() => {});

@@ -97,6 +97,10 @@ contextBridge.exposeInMainWorld('desktop', {
       if (typeof id !== 'string' || typeof title !== 'string') throw new TypeError('重命名参数无效');
       return ipcRenderer.invoke('agent:conversation-rename', { id, title });
     },
+    conversationUpdate: (id, patch) => {
+      if (typeof id !== 'string' || !patch || typeof patch !== 'object') throw new TypeError('会话设置参数无效');
+      return ipcRenderer.invoke('agent:conversation-update', { id, patch });
+    },
     memoryGet: () => ipcRenderer.invoke('agent:memory-get'),
     memorySet: (memoryBaseUrl, memoryEnabled) => {
       if (typeof memoryBaseUrl !== 'string' || typeof memoryEnabled !== 'boolean') throw new TypeError('记忆配置无效');

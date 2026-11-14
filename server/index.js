@@ -32,7 +32,12 @@ function createServer(cfg, { fetcher = fetch } = {}) {
     let text = String(p.text || '').slice(0, 4000);
     if (p.idle) text = idleNote(Number(p.idle) || 1, !!p.night);
     else if (p.mayContinue) text += MAYBE_UNFINISHED;
-    const messages = [{ role: 'system', content: systemPrompt(cfg, { tags: tts.expressive() }) }, ...history, { role: 'user', content: text }];
+    // 每个联系人可以在桌面端选不同模型与说话风格；只接受安全的模型名。
+    const style = typeof p.style === 'string' ? p.style.trim().slice(0, 200) : '';
+    const extra = style ? [{ role: 'system', content: `【本轮对话的说话风格】${style}` }] : [];
+    const messages = [{ role: 'system', content: systemPrompt(cfg, { tags: tts.expressive() }) }, ...extra, ...history, { role: 'user', content: text }];
+    const requested = typeof p.model === 'string' ? p.model.trim() : '';
+    const modelOverride = /^[A-Za-z0-9._:/-]{1,100}$/.test(requested) ? requested : '';
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -40,7 +45,7 @@ function createServer(cfg, { fetcher = fetch } = {}) {
     res.on('close', () => stop.abort());
     const f = filter(); let spoken = '';
     send('start', {});
-    const run = (lane, signal, onDelta) => streamChat({ base: cfg.llm.base, key: cfg.llm.key, model: lane === 'a' ? cfg.llm.model : cfg.llm.backup, messages, signal, onDelta, fetcher });
+    const run = (lane, signal, onDelta) => streamChat({ base: cfg.llm.base, key: cfg.llm.key, model: modelOverride || (lane === 'a' ? cfg.llm.model : cfg.llm.backup), messages, signal, onDelta, fetcher });
     const r = await hedge(run, { delayMs: cfg.llm.hedgeMs, backup: !!cfg.llm.backup, signal: stop.signal,
       onDelta: d => { const out = f.push(d); if (out) { spoken += out; send('delta', { text: out }); } } });
     const tail = f.flush(); if (tail) { spoken += tail; send('delta', { text: tail }); }

@@ -31,7 +31,6 @@ const { testProvider } = require('./provider-test.cjs');
 const {
   ConversationStore,
   buildSystemPrompt,
-  loadPersona,
   readTones,
   recallMemories,
   storeMemory,
@@ -121,9 +120,16 @@ function agentEvent(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', payload);
 }
 
-function activeLlmProvider() {
+function activeLlmProvider(preferredId = '') {
   const profile = config.profiles.find(item => item.id === config.activeProfileId);
-  const provider = config.providers.find(item => item.id === profile?.llmId);
+  const preferred = preferredId
+    ? config.providers.find(item => item.id === preferredId && item.kind === 'llm')
+    : null;
+  // A per-conversation model only wins when it is a usable LLM provider with a key;
+  // otherwise fall back to the active Profile so old conversations keep working.
+  const provider = preferred && preferred.enabled !== false && preferred.baseUrl && getProviderKey(config, preferred.id, safeStorage)
+    ? preferred
+    : config.providers.find(item => item.id === profile?.llmId);
   if (!provider) throw new Error('当前 Profile 没有可用的大模型 Provider');
   return {
     ...provider,
@@ -141,18 +147,25 @@ function startAgentChat(conversationId, userText) {
     try {
       const conversation = conversationStore.append(conversationId, { role: 'user', content: userText });
       agentEvent({ type: 'started', conversationId, ticketId, message: userText });
-      const tone = toneOptions.find(item => item.id === config.activeToneId) || toneOptions[0];
+      const conversationSettings = conversation.settings || {};
+      const tone = toneOptions.find(item => item.id === (conversationSettings.toneId || config.activeToneId))
+        || toneOptions.find(item => item.id === config.activeToneId)
+        || toneOptions[0];
+      const persona = { ...(config.persona || {}) };
+      if (conversationSettings.style) {
+        persona.style = [persona.style, conversationSettings.style].filter(Boolean).join('；');
+      }
       const memories = await recallMemories({
         memoryBaseUrl: config.memoryBaseUrl,
         memoryEnabled: config.memoryEnabled,
         query: userText,
       });
       const messages = [
-        { role: 'system', content: buildSystemPrompt({ persona: config.persona || loadPersona(rootDir), tone, memories }) },
+        { role: 'system', content: buildSystemPrompt({ persona, tone, memories }) },
         ...conversation.messages,
       ];
       const completed = await streamChat({
-        provider: activeLlmProvider(),
+        provider: activeLlmProvider(conversationSettings.model),
         messages,
         signal: controller.signal,
         onDelta: delta => {
@@ -547,17 +560,33 @@ function registerIpc() {
   ipcMain.handle('settings:get', () => ({
     persona: config.persona,
     avatar: config.avatar || 'preset-1',
-    theme: config.theme || 'deep-space',
+    userAvatar: config.userAvatar || 'preset-4',
+    theme: config.theme || 'mono-light',
+    phoneStyle: config.phoneStyle !== false,
+    waveform: config.waveform !== false,
+    toneId: config.activeToneId || '',
   }));
   ipcMain.handle('settings:save', (_event, patch) => {
     if (!patch || typeof patch !== 'object') throw new Error('设置参数无效');
     const next = { ...config };
     if (patch.persona && typeof patch.persona === 'object') next.persona = { ...config.persona, ...patch.persona };
     if (typeof patch.avatar === 'string') next.avatar = patch.avatar;
+    if (typeof patch.userAvatar === 'string') next.userAvatar = patch.userAvatar;
     if (typeof patch.theme === 'string' && ['deep-space', 'mono-light', 'warm-night', 'contrast'].includes(patch.theme)) next.theme = patch.theme;
+    if (typeof patch.phoneStyle === 'boolean') next.phoneStyle = patch.phoneStyle;
+    if (typeof patch.waveform === 'boolean') next.waveform = patch.waveform;
+    if (typeof patch.toneId === 'string' && toneOptions.some(item => item.id === patch.toneId)) next.activeToneId = patch.toneId;
     config = next;
     writeConfig(app, config, safeStorage);
-    return { persona: config.persona, avatar: config.avatar, theme: config.theme };
+    return {
+      persona: config.persona,
+      avatar: config.avatar,
+      userAvatar: config.userAvatar,
+      theme: config.theme,
+      phoneStyle: config.phoneStyle !== false,
+      waveform: config.waveform !== false,
+      toneId: config.activeToneId || '',
+    };
   });
   ipcMain.handle('agent:tones', () => ({ tones: toneOptions, activeToneId: config.activeToneId }));
   ipcMain.handle('agent:tone-set', (_event, id) => {
@@ -590,6 +619,31 @@ function registerIpc() {
   ipcMain.handle('agent:conversation-rename', (_event, input) => {
     if (!input || typeof input.id !== 'string' || typeof input.title !== 'string') throw new Error('重命名参数无效');
     return conversationStore.rename(input.id, input.title);
+  });
+  ipcMain.handle('agent:conversation-update', (_event, input) => {
+    if (!input || typeof input.id !== 'string' || !input.patch || typeof input.patch !== 'object') {
+      throw new Error('会话设置参数无效');
+    }
+    const patch = input.patch;
+    if (patch.title !== undefined && (typeof patch.title !== 'string' || !patch.title.trim())) {
+      throw new Error('联系人名称不能为空');
+    }
+    if (patch.number !== undefined) {
+      const digits = String(patch.number).replace(/\D/g, '');
+      if (digits && !/^\d{5,12}$/.test(digits)) throw new Error('号码需要 5–12 位数字');
+      patch.number = digits;
+    }
+    if (patch.model !== undefined && patch.model !== '' && !config.providers.some(item => item.kind === 'llm' && item.id === patch.model)) {
+      throw new Error('选择的模型不可用');
+    }
+    if (patch.toneId !== undefined && patch.toneId !== '' && !toneOptions.some(item => item.id === patch.toneId)) {
+      throw new Error('选择的语气不可用');
+    }
+    if (patch.avatar !== undefined && patch.avatar !== ''
+      && !/^(?:preset-[1-6]|data:image\/[a-z+]+;base64,)/i.test(String(patch.avatar))) {
+      throw new Error('头像格式无效');
+    }
+    return conversationStore.update(input.id, patch);
   });
   ipcMain.handle('agent:memory-get', () => ({
     memoryBaseUrl: config.memoryBaseUrl,

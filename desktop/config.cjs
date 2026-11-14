@@ -7,7 +7,7 @@ const {
 } = require('./providers.cjs');
 
 const DEFAULT_CONFIG = {
-  version: 2,
+  version: 3,
   port: 8787,
   env: {},
   dataDir: '',
@@ -30,8 +30,19 @@ const DEFAULT_CONFIG = {
     taboo: '',
   },
   avatar: 'preset-1',
-  theme: 'deep-space',
+  userAvatar: 'preset-4',
+  theme: 'mono-light',
+  phoneStyle: true,
+  waveform: true,
 };
+
+// v3: 外观默认改为浅色；电话样式聊天与通话波形默认开启。
+function finalizeConfig(source, value) {
+  const next = { ...value };
+  if (Number(source.version || 0) < 3 && next.theme === 'deep-space') next.theme = 'mono-light';
+  next.version = 3;
+  return next;
+}
 
 function configPath(app) {
   return path.join(app.getPath('userData'), 'config.json');
@@ -105,7 +116,7 @@ function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
     if (keyFor('STT_API_KEY')) providerKeys['builtin-stt-openai'] ||= keyFor('STT_API_KEY');
     if (source.env?.TTS_PROVIDER === 'elevenlabs' && keyFor('ELEVENLABS_API_KEY')) providerKeys['builtin-tts-elevenlabs'] ||= keyFor('ELEVENLABS_API_KEY');
     if (source.env?.TTS_PROVIDER !== 'elevenlabs' && keyFor('OPENAI_TTS_API_KEY')) providerKeys['builtin-tts-openai'] ||= keyFor('OPENAI_TTS_API_KEY');
-    return {
+    return finalizeConfig(source, {
       ...DEFAULT_CONFIG,
       ...source,
       version: 2,
@@ -116,10 +127,10 @@ function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
       activeProfileId,
       providerKeys,
       onboardingDismissed: source.onboardingDismissed === true,
-    };
+    });
   }
 
-  return {
+  return finalizeConfig(source, {
     ...DEFAULT_CONFIG,
     ...source,
     version: 2,
@@ -130,7 +141,7 @@ function mergeConfig(value, safeStorage = getElectronSafeStorage()) {
     activeProfileId,
     providerKeys,
     onboardingDismissed: source.onboardingDismissed === true,
-  };
+  });
 }
 
 function writeConfig(app, value, safeStorage = getElectronSafeStorage()) {
@@ -182,7 +193,7 @@ function launchEnvironment(app, config, rootDir, port, profileEnv = {}, safeStor
   const storedSecrets = Object.fromEntries(
     Object.entries(config.envSecrets || {}).map(([key, record]) => [key, decryptSecret(record, safeStorage)]),
   );
-  return {
+  const resolved = {
     ...process.env,
     ...dotenv,
     ...(config.env || {}),
@@ -190,6 +201,9 @@ function launchEnvironment(app, config, rootDir, port, profileEnv = {}, safeStor
     ...profileEnv,
     PORT: String(port),
   };
+  // 桌面版界面是中文，通话默认也用中文；需要英文时在环境变量里显式设置 REPLY_LANG=en。
+  if (!resolved.REPLY_LANG) resolved.REPLY_LANG = 'zh';
+  return resolved;
 }
 
 function saveProviders(app, providers, safeStorage) {

@@ -285,3 +285,103 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 :root[data-theme="contrast"] input,
 :root[data-theme="contrast"] textarea,
 :root[data-theme="contrast"] select { border-width: 2px; }
+
+/* 头像 */
+.avatar { display: inline-block; flex: 0 0 auto; border-radius: 50%; background-color: var(--panel-2); background-position: center; background-size: cover; }
+.avatar.preset-1 { background-image: linear-gradient(135deg, #FF6B5A, #7D2E2E); }
+.avatar.preset-2 { background-image: linear-gradient(135deg, #2563EB, #172554); }
+.avatar.preset-3 { background-image: linear-gradient(135deg, #E0A458, #6B3F14); }
+.avatar.preset-4 { background-image: linear-gradient(135deg, #A855F7, #3B0764); }
+.avatar.preset-5 { background-image: linear-gradient(135deg, #14B8A6, #134E4A); }
+.avatar.preset-6 { background-image: linear-gradient(135deg, #F472B6, #831843); }
+.conversation-avatar { width: 32px; height: 32px; }
+.conversation-main-avatar { width: 40px; height: 40px; }
+.message-avatar { width: 30px; height: 30px; margin-top: 2px; }
+.editor-avatar { width: 56px; height: 56px; }
+.call-avatar { width: 48px; height: 48px; }
+.call-avatar-small { width: 28px; height: 28px; }
+.avatar-picker-preview { width: 56px; height: 56px; }
+
+/* 会话列表：头像 + 名称 */
+.conversation-item-row { align-items: stretch; }
+.conversation-item { display: flex; align-items: center; gap: 10px; padding: 8px 9px; }
+.conversation-item-body { min-width: 0; display: grid; gap: 2px; }
+.conversation-item-name { overflow: hidden; color: currentColor; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-item-sub { overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-item.active .conversation-item-sub { color: var(--muted); }
+
+/* 图标按钮与模型胶囊 */
+.icon-button { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: transparent; }
+.icon-button:hover { color: var(--text); background: var(--panel-2); }
+.icon-button.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.conversation-tools .icon-button { border-color: var(--border); }
+.conversation-tools .icon-button:hover { border-color: var(--focus); }
+.model-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 190px; overflow: hidden; padding: 5px 9px; border-radius: 999px; color: var(--muted); background: var(--panel-2); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.model-chip svg { width: 13px; height: 13px; flex: 0 0 13px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+
+/* 会话头部 */
+.conversation-identity { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.conversation-identity h1 { margin: 0; font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-number { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.message-row { gap: 9px; }
+
+/* 电话样式的聊天界面 */
+.conversation-main.phone-mode { justify-self: center; width: min(460px, 100%); height: 100%; padding: 18px 16px 14px; border: 1px solid var(--border); border-radius: 32px; background: var(--panel); box-shadow: 0 18px 50px color-mix(in srgb, var(--bg) 20%, transparent); }
+.phone-mode .conversation-toolbar { flex-direction: column; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.phone-mode .conversation-identity { flex-direction: column; gap: 7px; text-align: center; }
+.phone-mode .conversation-main-avatar { width: 66px; height: 66px; }
+.phone-mode .conversation-identity h1 { font-size: 19px; }
+.phone-mode .conversation-tools { width: 100%; justify-content: center; }
+.phone-mode .message-stream { border-radius: 20px; padding: 12px 10px 16px; }
+.phone-mode .message-form textarea { min-height: 46px; }
+.phone-mode .conversation-hint { text-align: center; }
+
+/* 设置：头像 / 语气 / 开关 */
+.avatar-duo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; }
+.avatar-block-title { margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.avatar-picker { display: flex; align-items: center; gap: 16px; }
+.avatar-picker-grid { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.avatar-picker-grid .avatar-preset { width: 34px; height: 34px; border-width: 2px; }
+.avatar-upload-mini { display: grid; place-items: center; border: 1px dashed var(--border); color: var(--muted); background: transparent; font-size: 16px; cursor: pointer; }
+.avatar-upload-mini:hover { border-color: var(--accent); color: var(--text); }
+.settings-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.tone-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.tone-option { padding: 8px 15px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: transparent; }
+.tone-option:hover { color: var(--text); border-color: var(--focus); }
+.tone-option.selected { color: var(--accent-text); border-color: transparent; background: var(--accent); }
+.pref-list { display: grid; }
+.pref-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 13px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.pref-row:last-child { border-bottom: 0; }
+.pref-row strong { font-size: 13px; font-weight: 600; }
+.pref-row p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+
+/* 联系人编辑弹窗 */
+.conversation-editor { width: min(520px, 100%); }
+.editor-contact { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; padding: 14px; border-radius: 12px; background: var(--panel-2); }
+.editor-contact strong { display: block; font-size: 16px; }
+.editor-number { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.editor-field { display: block; margin-bottom: 14px; }
+.editor-field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.editor-field small { display: block; margin-top: 5px; color: var(--faint); font-size: 11px; }
+
+/* 通话页：电话式联系人列表 */
+.dialer { display: grid; place-items: start center; padding: 8px 0; }
+.call-contacts { width: min(520px, 100%); display: grid; gap: 10px; }
+.call-contact { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px 16px; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--panel); text-align: left; }
+.call-contact:hover { border-color: var(--focus); background: var(--panel-2); }
+.call-contact-info { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.call-contact-info strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.call-contact-info span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.call-dial { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #FFFFFF; background: #3DBF7A; }
+.call-dial:hover { background: #35A96B; }
+.call-dial svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
+.call-stage-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.call-stage-label { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
+
+/* 设置里的联系人列表 */
+.settings-contacts { display: grid; gap: 8px; }
+.settings-contact-row { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); }
+.settings-contact-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.settings-contact-text strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.settings-contact-text span { color: var(--muted); font-size: 12px; }
