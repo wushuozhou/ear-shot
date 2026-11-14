@@ -9,9 +9,9 @@
   };
   const themes = ['deep-space', 'mono-light', 'warm-night', 'contrast'];
   const mockProviders = [
-    { id: 'mock-openai', name: 'OpenAI 示例', kind: 'llm', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'gpt-4o-mini', enabled: true, maskedKey: '••••' },
-    { id: 'mock-whisper', name: 'Whisper 示例', kind: 'stt', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'whisper-1', enabled: true, maskedKey: '••••' },
-    { id: 'mock-voice', name: '声音示例', kind: 'tts', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'voice-1', enabled: true, maskedKey: '••••' },
+    { id: 'builtin-llm-openai', name: 'OpenAI 示例', kind: 'llm', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'gpt-4o-mini', enabled: true, maskedKey: '••••' },
+    { id: 'builtin-stt-openai', name: 'Whisper 示例', kind: 'stt', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'whisper-1', enabled: true, maskedKey: '••••' },
+    { id: 'builtin-tts-openai', name: '声音示例', kind: 'tts', protocol: 'openai-compatible', baseUrl: 'https://api.example.com', model: 'voice-1', enabled: true, maskedKey: '••••' },
   ];
   const mockConversations = [
     { id: 'mock-1', title: '欢迎使用', messages: [{ role: 'assistant', content: '你好，我在这里。' }] },

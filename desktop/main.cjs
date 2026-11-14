@@ -432,7 +432,7 @@ function registerIpc() {
     if (!input || typeof input.baseUrl !== 'string' || typeof input.apiKey !== 'string') {
       throw new Error('Base URL 和 API Key 必填');
     }
-    const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
+    const baseUrl = input.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
     const apiKey = input.apiKey.trim();
     if (!/^https?:\/\//i.test(baseUrl)) throw new Error('Base URL 必须以 http:// 或 https:// 开头');
     if (!apiKey) throw new Error('API Key 必填');
