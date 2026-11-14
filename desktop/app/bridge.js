@@ -18,7 +18,15 @@
     { id: 'mock-2', title: '今日计划', messages: [{ role: 'user', content: '帮我整理今天的计划。' }, { role: 'assistant', content: '当然可以。' }] },
     { id: 'mock-3', title: '灵感记录', messages: [] },
   ];
-  const memory = { providers: mockProviders.map(item => ({ ...item })), conversations: mockConversations.map(item => ({ ...item, messages: [...item.messages] })), persona: { ...defaultPersona }, avatar: 'preset-1', theme: localStorage.getItem('earshot:theme') || 'deep-space' };
+  const memory = {
+    providers: mockProviders.map(item => ({ ...item })),
+    profiles: [{ id: 'mock-profile', name: '默认' }],
+    activeProfileId: 'mock-profile',
+    conversations: mockConversations.map(item => ({ ...item, messages: [...item.messages] })),
+    persona: { ...defaultPersona },
+    avatar: 'preset-1',
+    theme: localStorage.getItem('earshot:theme') || 'deep-space',
+  };
   const real = window.electronAPI || window.desktop;
   const invoke = async (fn, fallback) => {
     if (!real) return fallback();
@@ -26,12 +34,43 @@
   };
   const mock = {
     providers: {
-      list: async () => ({ providers: memory.providers, profiles: [{ id: 'mock-profile', name: '默认' }], activeProfileId: 'mock-profile', onboardingDismissed: true }),
+      list: async () => ({ providers: memory.providers, profiles: memory.profiles, activeProfileId: memory.activeProfileId, onboardingDismissed: true }),
       save: async value => { const index = memory.providers.findIndex(item => item.id === value.id); if (index >= 0) memory.providers[index] = { ...memory.providers[index], ...value }; else memory.providers.push({ ...value, id: value.id || `mock-${Date.now()}` }); return { providers: memory.providers }; },
       delete: async id => { memory.providers = memory.providers.filter(item => item.id !== id); return { providers: memory.providers }; },
       test: async () => ({ ok: true, latencyMs: 42, message: '连接正常' }),
+      quickConnect: async input => {
+        const provider = {
+          id: `mock-${Date.now()}`,
+          name: 'preview.example.com',
+          kind: 'llm',
+          protocol: 'openai-compatible',
+          baseUrl: input.baseUrl.replace(/\/+$/, '') + '/v1',
+          model: input.model || 'preview-model',
+          enabled: true,
+          builtin: false,
+          maskedKey: '••••',
+        };
+        memory.providers.push(provider);
+        return { ok: true, provider };
+      },
+      onboarding: { setDismissed: async () => ({ onboardingDismissed: true }) },
     },
-    app: { getMeta: async () => ({ port: null, dataDir: '', serviceStatus: 'ready' }), restartService: async () => ({}), openPath: async () => ({}) },
+    profiles: {
+      list: async () => ({ profiles: memory.profiles, activeProfileId: memory.activeProfileId, onboardingDismissed: true }),
+      save: async profile => { const value = profile?.profile || profile; const index = memory.profiles.findIndex(item => item.id === value.id); if (index >= 0) memory.profiles[index] = { ...memory.profiles[index], ...value }; else memory.profiles.push(value); return { profiles: memory.profiles, activeProfileId: memory.activeProfileId }; },
+      setActive: async id => { memory.activeProfileId = id; return { profiles: memory.profiles, activeProfileId: id }; },
+    },
+    app: {
+      getMeta: async () => ({ version: '0.2.0-preview', port: null, dataDir: '', serviceStatus: 'ready' }),
+      restartService: async () => ({}),
+      openPath: async () => ({}),
+      openExternal: async () => ({}),
+      chooseDataDir: async () => ({ canceled: true }),
+      settings: {
+        get: async () => ({ persona: memory.persona, avatar: memory.avatar, theme: memory.theme }),
+        save: async patch => { Object.assign(memory, patch); return { ...patch }; },
+      },
+    },
     getStatus: async () => ({ status: 'ready', message: '浏览器预览模式' }),
     onState: () => () => {},
     agent: {
@@ -46,6 +85,7 @@
       onEvent: () => () => {},
       memoryGet: async () => ({ memoryBaseUrl: '', memoryEnabled: false }),
       memorySet: async () => ({}),
+      memoryTest: async () => ({ ok: true, message: '浏览器预览模式' }),
     },
     settings: {
       get: async () => ({ persona: memory.persona, avatar: memory.avatar, theme: memory.theme }),
@@ -53,11 +93,12 @@
     },
   };
   const desktop = real || mock;
+  if (!real) window.desktop = mock;
   window.earshotBridge = {
     ...desktop,
     settings: {
-      get: () => invoke(() => desktop.settings?.get(), mock.settings.get),
-      save: patch => invoke(() => desktop.settings?.save(patch), () => mock.settings.save(patch)),
+      get: () => invoke(() => desktop.app?.settings?.get(), mock.settings.get),
+      save: patch => invoke(() => desktop.app?.settings?.save(patch), () => mock.settings.save(patch)),
     },
     themeNames: themes,
     isMock: !real,

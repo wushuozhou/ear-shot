@@ -220,7 +220,33 @@ function providerCard(provider) {
   const tag = document.createElement('span');
   tag.className = 'tag';
   tag.textContent = provider.protocol;
-  head.append(title, tag);
+  const providerWebsites = {
+    'builtin-llm-openai': 'https://platform.openai.com',
+    'builtin-stt-openai': 'https://platform.openai.com',
+    'builtin-tts-openai': 'https://platform.openai.com',
+    'builtin-llm-deepseek': 'https://platform.deepseek.com',
+    'builtin-llm-siliconflow': 'https://cloud.siliconflow.cn',
+    'builtin-stt-siliconflow': 'https://cloud.siliconflow.cn',
+    'builtin-tts-siliconflow': 'https://cloud.siliconflow.cn',
+    'builtin-tts-elevenlabs': 'https://elevenlabs.io',
+    'builtin-llm-openrouter': 'https://openrouter.ai',
+    'builtin-llm-groq': 'https://console.groq.com',
+    'builtin-llm-ollama': 'https://ollama.com',
+  };
+  const website = providerWebsites[provider.id];
+  const headActions = document.createElement('div');
+  headActions.className = 'provider-card-head-actions';
+  headActions.append(tag);
+  if (website) {
+    const external = button('', 'provider-external');
+    external.title = `打开 ${provider.name} 官网`;
+    external.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg>';
+    external.addEventListener('click', () => {
+      window.desktop.app.openExternal(website).catch(error => showError(error.message));
+    });
+    headActions.append(external);
+  }
+  head.append(title, headActions);
   card.append(head);
 
   const meta = document.createElement('div');
@@ -307,6 +333,56 @@ function providerCard(provider) {
   result.className = 'test-result';
   card.append(result);
   return card;
+}
+
+function openQuickConnectForm() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const modal = document.createElement('form');
+  modal.className = 'modal quick-connect-modal';
+  modal.innerHTML = '<h2>快速连接</h2>';
+  const fields = [
+    ['baseUrl', 'Base URL', 'url', true],
+    ['apiKey', 'API Key', 'password', true],
+    ['model', '模型名', 'text', false],
+  ];
+  fields.forEach(([name, label, type, required]) => {
+    const row = document.createElement('div');
+    row.className = 'form-field';
+    const fieldLabel = document.createElement('label');
+    fieldLabel.textContent = label;
+    const input = document.createElement('input');
+    input.name = name;
+    input.type = type;
+    input.required = required;
+    row.append(fieldLabel, input);
+    modal.append(row);
+  });
+  const error = document.createElement('div');
+  error.className = 'quick-connect-error';
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = button('取消', 'button button-quiet');
+  cancel.addEventListener('click', () => backdrop.remove());
+  const save = button('验证并保存', 'button');
+  actions.append(cancel, save);
+  modal.append(error, actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  modal.addEventListener('submit', async event => {
+    event.preventDefault();
+    error.textContent = '';
+    save.disabled = true;
+    try {
+      await window.desktop.providers.quickConnect(Object.fromEntries(new FormData(modal)));
+      backdrop.remove();
+      await refresh();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+    } finally {
+      save.disabled = false;
+    }
+  });
 }
 
 function renderConversationMessages() {
@@ -605,7 +681,12 @@ function renderProviders() {
   heading.innerHTML = '<div><h1>供应商</h1><p>管理模型、转文字和声音服务。密钥只保存在你的电脑上。</p></div>';
   const add = button('添加供应商', 'button');
   add.addEventListener('click', () => openProviderForm());
-  heading.append(add);
+  const quickConnect = button('快速连接', 'button button-quiet');
+  quickConnect.addEventListener('click', openQuickConnectForm);
+  const headingActions = document.createElement('div');
+  headingActions.className = 'page-heading-actions';
+  headingActions.append(add, quickConnect);
+  heading.append(headingActions);
   content.append(heading);
   if (!state.onboardingDismissed && onboardingNeeded()) {
     renderOnboardingCard();
@@ -681,7 +762,7 @@ function renderCall() {
 }
 
 async function renderSettings() {
-  const settings = await window.desktop.settings.get();
+  const settings = await window.desktop.app.settings.get();
   const persona = { ...(settings.persona || {}) };
   const savedAvatar = settings.avatar || 'preset-1';
   const defaultPersona = {
@@ -717,7 +798,7 @@ async function renderSettings() {
     option.addEventListener('click', async () => {
       document.documentElement.dataset.theme = theme;
       localStorage.setItem('earshot:theme', theme);
-      await window.desktop.settings.save({ theme });
+      await window.desktop.app.settings.save({ theme });
       renderSettings();
     });
     themeOptions.append(option);
@@ -747,7 +828,7 @@ async function renderSettings() {
   personaSave.addEventListener('click', async event => {
     event.preventDefault();
     const nextPersona = Object.fromEntries(new FormData(personaForm));
-    await window.desktop.settings.save({ persona: nextPersona });
+    await window.desktop.app.settings.save({ persona: nextPersona });
     personaSave.textContent = '已保存';
     setTimeout(() => { personaSave.textContent = '保存'; }, 1200);
   });
@@ -836,7 +917,7 @@ async function renderSettings() {
   const avatarSave = button('保存');
   const avatarReset = button('恢复默认', 'button button-quiet');
   avatarSave.addEventListener('click', async () => {
-    await window.desktop.settings.save({ avatar: pendingAvatar });
+    await window.desktop.app.settings.save({ avatar: pendingAvatar });
     avatarSave.textContent = '已保存';
     setTimeout(() => { avatarSave.textContent = '保存'; }, 1200);
   });
@@ -853,7 +934,19 @@ async function renderSettings() {
   const storageCard = document.createElement('section');
   storageCard.className = 'settings-card settings-section';
   storageCard.innerHTML = '<h2>存储</h2>';
-  [['配置文件路径', state.meta?.configPath || ''], ['日志目录', state.meta?.logPath || ''], ['当前端口', state.meta?.port || '未启动'], ['密钥存储方式', state.meta?.storage || ''], ['数据目录', state.meta?.dataDir || '']].forEach(([label, value]) => storageCard.append(settingRow(label, value)));
+  [['配置文件路径', state.meta?.configPath || ''], ['日志目录', state.meta?.logPath || ''], ['当前端口', state.meta?.port || '未启动'], ['密钥存储方式', state.meta?.storage || '']].forEach(([label, value]) => storageCard.append(settingRow(label, value)));
+  const dataRow = settingRow('数据目录', state.meta?.dataDir || '');
+  const changeDataDir = button('更改…', 'button button-quiet button-small');
+  changeDataDir.addEventListener('click', async () => {
+    try {
+      const result = await window.desktop.app.chooseDataDir();
+      if (!result.canceled) showMessage('已迁移，重启应用后生效');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  dataRow.replaceChild(changeDataDir, dataRow.lastElementChild);
+  storageCard.append(dataRow);
   const storageActions = document.createElement('div');
   storageActions.className = 'settings-actions';
   const config = button('打开配置目录', 'button button-quiet');
@@ -928,7 +1021,13 @@ async function renderSettings() {
 
   const about = document.createElement('section');
   about.className = 'settings-card settings-section about-settings';
-  about.innerHTML = `<h2>关于</h2><div class="about-row"><span>版本</span><strong>${state.meta?.version || ''}</strong></div><div class="about-row"><span>GitHub 仓库</span><a href="https://github.com/wushuozhou/ear-shot">打开链接</a></div><div class="about-row"><span>许可证</span><a href="../../LICENSE">查看许可证</a></div>`;
+  about.innerHTML = `<h2>关于</h2><div class="about-row"><span>版本</span><strong>${state.meta?.version || ''}</strong></div><div class="about-row"><span>GitHub 仓库</span><a href="https://github.com/wushuozhou/ear-shot">打开链接</a></div><div class="about-row"><span>许可证</span><a href="https://github.com/wushuozhou/ear-shot/blob/main/LICENSE">查看许可证</a></div>`;
+  about.querySelectorAll('a[href]').forEach(link => {
+    link.addEventListener('click', event => {
+      event.preventDefault();
+      window.desktop.app.openExternal(link.href).catch(error => showError(error.message));
+    });
+  });
   content.append(about);
 }
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -52,6 +52,15 @@ const rootDir = fs.existsSync(path.join(devRoot, 'server', 'index.js'))
     ? packedRoot
     : devRoot;
 const serverScript = path.join(rootDir, 'server', 'index.js');
+const dataDirPointer = path.join(app.getPath('appData'), 'Earshot', 'data-dir.txt');
+
+function applyDataDirOverride() {
+  if (!fs.existsSync(dataDirPointer)) return;
+  const target = fs.readFileSync(dataDirPointer, 'utf8').trim();
+  if (target && path.isAbsolute(target) && fs.existsSync(target)) app.setPath('userData', target);
+}
+
+applyDataDirOverride();
 
 let mainWindow;
 let service;
@@ -192,6 +201,11 @@ function createWindow() {
       webviewTag: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    event.preventDefault();
+    void shell.openExternal(url);
   });
   mainWindow.loadFile(path.join(app.getAppPath(), 'loading.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
@@ -414,6 +428,53 @@ function registerIpc() {
     if (!provider) throw new Error(`找不到 Provider：${id}`);
     return testProvider({ ...provider, apiKey: getProviderKey(config, id, safeStorage) });
   });
+  ipcMain.handle('providers:quick-connect', async (_event, input) => {
+    if (!input || typeof input.baseUrl !== 'string' || typeof input.apiKey !== 'string') {
+      throw new Error('Base URL 和 API Key 必填');
+    }
+    const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
+    const apiKey = input.apiKey.trim();
+    if (!/^https?:\/\//i.test(baseUrl)) throw new Error('Base URL 必须以 http:// 或 https:// 开头');
+    if (!apiKey) throw new Error('API Key 必填');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    let response;
+    try {
+      response = await fetch(`${baseUrl}/v1/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw new Error(error.name === 'AbortError' ? '验证超时（10 秒）' : `验证失败：${error.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) throw new Error(`验证失败（HTTP ${response.status}）`);
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      throw new Error('验证失败：响应不是有效 JSON');
+    }
+    const models = Array.isArray(payload?.data) ? payload.data : [];
+    const firstModel = models.find(item => typeof item?.id === 'string')?.id || '';
+    const model = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : firstModel;
+    if (!model) throw new Error('验证成功，但没有可用模型');
+    const hostname = new URL(baseUrl).hostname || '自定义供应商';
+    const provider = {
+      id: `custom-llm-${Date.now().toString(36)}`,
+      name: hostname,
+      kind: 'llm',
+      protocol: 'openai-compatible',
+      baseUrl: `${baseUrl}/v1`,
+      model,
+      enabled: true,
+      builtin: false,
+    };
+    config = saveProviders(app, addProvider(config.providers, provider), safeStorage);
+    config = setProviderKey(app, provider.id, apiKey, safeStorage);
+    return { ok: true, provider: { ...provider, maskedKey: '••••' } };
+  });
   ipcMain.handle('onboarding:set-dismissed', (_event, dismissed) => {
     if (typeof dismissed !== 'boolean') throw new Error('向导状态无效');
     config = setOnboardingDismissed(app, dismissed, safeStorage);
@@ -454,6 +515,28 @@ function registerIpc() {
     if (target === 'config') return shell.openPath(path.dirname(configPath(app)));
     if (target === 'logs') return shell.openPath(path.dirname(logFile));
     throw new Error('只能打开配置目录或日志目录');
+  });
+  ipcMain.handle('app:open-external', (_event, url) => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new Error('只允许打开 http 或 https 链接');
+    return shell.openExternal(url);
+  });
+  ipcMain.handle('app:choose-data-dir', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    const target = path.resolve(result.filePaths[0]);
+    const current = path.resolve(app.getPath('userData'));
+    fs.mkdirSync(target, { recursive: true });
+    if (target !== current) {
+      const configFile = path.join(current, 'config.json');
+      const logsDirectory = path.join(current, 'logs');
+      if (fs.existsSync(configFile)) fs.copyFileSync(configFile, path.join(target, 'config.json'));
+      if (fs.existsSync(logsDirectory)) fs.cpSync(logsDirectory, path.join(target, 'logs'), { recursive: true });
+    }
+    fs.mkdirSync(path.dirname(dataDirPointer), { recursive: true });
+    fs.writeFileSync(dataDirPointer, `${target}\n`, { mode: 0o600 });
+    return { dataDir: target, restartRequired: true };
   });
   ipcMain.handle('app:set-data-dir', (_event, dataDir) => {
     if (typeof dataDir !== 'string' || dataDir.length > 2000) throw new Error('数据目录路径无效');

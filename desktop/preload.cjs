@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('desktop', {
       if (typeof id !== 'string') throw new TypeError('Provider id 必须是字符串');
       return ipcRenderer.invoke('providers:test', id);
     },
+    quickConnect: input => {
+      if (!input || typeof input.baseUrl !== 'string' || typeof input.apiKey !== 'string' || typeof input.model !== 'string') {
+        throw new TypeError('快速连接参数无效');
+      }
+      return ipcRenderer.invoke('providers:quick-connect', input);
+    },
     setKey: (id, key) => {
       if (typeof id !== 'string' || typeof key !== 'string') throw new TypeError('Provider 密钥参数无效');
       return ipcRenderer.invoke('providers:set-key', { id, key });
@@ -46,6 +52,11 @@ contextBridge.exposeInMainWorld('desktop', {
       if (target !== 'config' && target !== 'logs') throw new TypeError('只能打开配置目录或日志目录');
       return ipcRenderer.invoke('app:open-path', target);
     },
+    openExternal: url => {
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new TypeError('只允许打开 http 或 https 链接');
+      return ipcRenderer.invoke('app:open-external', url);
+    },
+    chooseDataDir: () => ipcRenderer.invoke('app:choose-data-dir'),
     settings: {
       get: () => ipcRenderer.invoke('settings:get'),
       save: patch => ipcRenderer.invoke('settings:save', patch),

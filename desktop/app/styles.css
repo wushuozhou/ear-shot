@@ -1,4 +1,5 @@
 :root[data-theme="deep-space"] {
+  color-scheme: dark;
   --bg: #0E1114;
   --panel: #161A1F;
   --panel-2: #1D2329;
@@ -11,6 +12,7 @@
   --focus: #FF6B5A;
 }
 :root[data-theme="mono-light"] {
+  color-scheme: light;
   --bg: #FFFFFF;
   --panel: #F7F8FA;
   --panel-2: #EEF0F3;
@@ -23,6 +25,7 @@
   --focus: #2563EB;
 }
 :root[data-theme="warm-night"] {
+  color-scheme: dark;
   --bg: #12100E;
   --panel: #1B1714;
   --panel-2: #241F1A;
@@ -35,6 +38,7 @@
   --focus: #E0A458;
 }
 :root[data-theme="contrast"] {
+  color-scheme: dark;
   --bg: #000000;
   --panel: #0A0A0A;
   --panel-2: #141414;
@@ -116,6 +120,10 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .provider-card { min-height: 190px; display: flex; flex-direction: column; }
 .provider-highlight { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent); }
 .provider-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.provider-card-head-actions { display: flex; align-items: center; gap: 8px; }
+.provider-external { width: 16px; height: 16px; padding: 0; border: 0; color: var(--muted); background: transparent; }
+.provider-external:hover { color: var(--accent); }
+.provider-external svg { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .provider-name { font-weight: 600; }
 .provider-id { margin-top: 4px; color: var(--faint); font-size: 11px; }
 .tag { display: inline-block; padding: 3px 7px; border-radius: 5px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 10px; white-space: nowrap; }
@@ -218,6 +226,8 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .onboarding-missing { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
 .onboarding-missing-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px; color: var(--muted); background: color-mix(in srgb, var(--bg) 55%, transparent); font-size: 12px; }
 .onboarding-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; color: var(--faint); font-size: 11px; }
+.page-heading-actions { display: flex; align-items: center; gap: 8px; }
+.quick-connect-error { min-height: 18px; margin-top: 10px; color: var(--danger); font-size: 12px; }
 
 .settings-section { margin-bottom: 32px; }
 .settings-section h2 { margin: 0 0 16px; font-size: 20px; }
