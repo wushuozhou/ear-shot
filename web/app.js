@@ -24,6 +24,10 @@ const CONTACT = { name: '', number: '', avatar: 'preset-1', model: '', style: ''
 let SHOW_WAVE = true;
 let INFO = { name: 'Earshot', lang: 'zh', needsToken: false };
 
+function stripStageDirections(value) {
+  return String(value || '').replace(/\[[a-z][a-z ,'-]{0,40}\]\s?/gi, '');
+}
+
 function formatNumber(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.length === 11) return `${digits.slice(0, 3)} ${digits.slice(3, 7)} ${digits.slice(7)}`;
@@ -294,7 +298,10 @@ class Call {
     }
     collect(buf); flush();
     const reply = all.trim();
-    this.history.push({ role: 'user', content: idle ? `(${idle} minute(s) of silence on the line)` : text }, { role: 'assistant', content: reply || '…' });
+    this.history.push(
+      { role: 'user', content: idle ? `(${idle} minute(s) of silence on the line)` : text },
+      { role: 'assistant', content: stripStageDirections(reply) || '…' },
+    );
     if (flags.stay) this.stay = true;
     if (flags.hangup) this.hangAfter = 'bye';
     this.replyDone = true;

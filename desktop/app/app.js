@@ -16,7 +16,7 @@ const state = {
   agentBusy: false,
   agentTicketId: '',
   streamingText: '',
-  chat: { phoneStyle: true, waveform: true },
+  chat: { waveform: true },
   avatars: { ai: 'preset-1', user: 'preset-4' },
 };
 
@@ -25,6 +25,11 @@ const PHONE_THEME = ['deep-space', 'mono-light', 'warm-night', 'contrast'];
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
+
+document.addEventListener('pointerdown', event => {
+  if (event.target.closest('.conversation-item-row')) return;
+  document.querySelectorAll('.conversation-item-row.expanded').forEach(item => item.classList.remove('expanded'));
+});
 
 function escapeText(value) {
   return String(value ?? '');
@@ -185,6 +190,10 @@ function renderMarkdown(value) {
   return html;
 }
 
+function stripStageDirections(value) {
+  return String(value ?? '').replace(/\[[a-z][a-z ,'-]{0,40}\]\s?/gi, '');
+}
+
 function renderTop() {
   const status = statusLabel(state.service.status);
   $('#top-status').textContent = status;
@@ -265,6 +274,7 @@ function avatarPicker(initial, onChange, fallback = 'preset-1') {
   upload.textContent = '+';
   const file = document.createElement('input');
   file.type = 'file';
+  file.hidden = true;
   file.accept = 'image/*';
   file.addEventListener('change', () => {
     const image = file.files?.[0];
@@ -303,6 +313,8 @@ function conversationSettings(item) {
     number: item.number || '',
     model: item.model || '',
     toneId: item.toneId || '',
+    tone: item.tone || '',
+    persona: item.persona || '',
     avatar: item.avatar || '',
     style: item.style || '',
   };
@@ -531,7 +543,7 @@ function renderConversationMessages() {
     row.className = `message-row ${role === 'user' ? 'user' : 'assistant'}`;
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    bubble.innerHTML = renderMarkdown(content);
+    bubble.innerHTML = renderMarkdown(stripStageDirections(content));
     const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar');
     if (role === 'user') row.append(bubble, avatar);
     else row.append(avatar, bubble);
@@ -558,7 +570,7 @@ function renderConversation() {
   const listHead = document.createElement('div');
   listHead.className = 'conversation-list-head';
   const listTitle = document.createElement('strong');
-  listTitle.textContent = '会话';
+  listTitle.textContent = '联系人';
   const newConversation = button('新建', 'button button-quiet button-small');
   newConversation.addEventListener('click', async () => {
     try {
@@ -596,11 +608,14 @@ function renderConversation() {
     name.textContent = item.title || '新对话';
     const sub = document.createElement('span');
     sub.className = 'conversation-item-sub';
-    const itemNumber = item.number || conversationSettings(item).number;
-    sub.textContent = itemNumber ? formatNumber(itemNumber) : conversationModelName(item);
+    sub.textContent = '点击开始聊天';
     body.append(name, sub);
     row.append(body);
     row.addEventListener('click', async () => {
+      if (itemRow.classList.contains('expanded')) {
+        itemRow.classList.remove('expanded');
+        return;
+      }
       try {
         state.currentConversation = await window.desktop.agent.conversationLoad(item.id);
         state.agentBusy = false;
@@ -610,41 +625,64 @@ function renderConversation() {
         showError(error.message);
       }
     });
-    row.addEventListener('contextmenu', event => {
-      event.preventDefault();
-      openConversationEditor(item);
-    });
-    const edit = iconButton('编辑联系人', '<path d="M4 20h4l10-10-4-4L4 16v4Z"/><path d="m13 5 4 4"/>');
-    edit.addEventListener('click', event => {
-      event.stopPropagation();
-      openConversationEditor(item);
-    });
-    const remove = button('×', 'conversation-item-delete');
-    remove.title = '删除会话';
+    const remove = button('删除', 'conversation-item-delete');
     remove.addEventListener('click', async event => {
       event.stopPropagation();
-      if (!window.confirm(`确定删除“${item.title}”吗？`)) return;
-      try {
-        await window.desktop.agent.conversationDelete(item.id);
-        state.conversations = await window.desktop.agent.conversationList();
-        if (state.currentConversation?.id === item.id) {
-          state.currentConversation = state.conversations.length
-            ? await window.desktop.agent.conversationLoad(state.conversations[0].id)
-            : await window.desktop.agent.conversationNew('新对话');
-          state.conversations = await window.desktop.agent.conversationList();
-        }
-        renderConversation();
-      } catch (error) {
-        showError(error.message);
+      openDeleteConfirm(item);
+    });
+    itemRow.append(row, remove);
+    let startX = 0;
+    let offsetX = 0;
+    let dragging = false;
+    let swiped = false;
+    let wasExpanded = false;
+    itemRow.addEventListener('pointerdown', event => {
+      wasExpanded = itemRow.classList.contains('expanded');
+      items.querySelectorAll('.conversation-item-row.expanded').forEach(other => {
+        if (other !== itemRow) other.classList.remove('expanded');
+      });
+      startX = event.clientX;
+      offsetX = 0;
+      dragging = true;
+      itemRow.setPointerCapture(event.pointerId);
+    });
+    itemRow.addEventListener('pointermove', event => {
+      if (!dragging) return;
+      offsetX = Math.max(-86, Math.min(0, event.clientX - startX));
+      swiped = Math.abs(offsetX) > 5;
+      itemRow.style.setProperty('--swipe-x', `${offsetX}px`);
+    });
+    itemRow.addEventListener('pointerup', event => {
+      if (!dragging) return;
+      dragging = false;
+      itemRow.releasePointerCapture(event.pointerId);
+      if (offsetX < -35) itemRow.classList.add('expanded');
+      else if (!wasExpanded) itemRow.classList.remove('expanded');
+      itemRow.style.removeProperty('--swipe-x');
+      if (itemRow.classList.contains('expanded')) {
+        items.querySelectorAll('.conversation-item-row.expanded').forEach(other => {
+          if (other !== itemRow) other.classList.remove('expanded');
+        });
       }
     });
-    itemRow.append(row, edit, remove);
+    itemRow.addEventListener('click', event => {
+      if (!swiped) return;
+      swiped = false;
+      event.stopPropagation();
+      event.preventDefault();
+    }, true);
+    itemRow.addEventListener('click', event => {
+      if (itemRow.classList.contains('expanded') && !event.target.closest('.conversation-item-delete')) {
+        event.stopPropagation();
+        itemRow.classList.remove('expanded');
+      }
+    });
     items.append(itemRow);
   });
   list.append(items);
 
   const main = document.createElement('section');
-  main.className = `conversation-main${state.chat.phoneStyle ? ' phone-mode' : ''}`;
+  main.className = 'conversation-main';
   const toolbar = document.createElement('div');
   toolbar.className = 'conversation-toolbar';
   const identity = document.createElement('div');
@@ -653,41 +691,11 @@ function renderConversation() {
   const identityText = document.createElement('div');
   const heading = document.createElement('h1');
   heading.textContent = state.currentConversation?.title || '对话';
-  const numberLabel = document.createElement('span');
-  numberLabel.className = 'conversation-number';
-  const number = conversationSettings(state.currentConversation).number;
-  numberLabel.textContent = number ? formatNumber(number) : '未设置号码';
-  identityText.append(heading, numberLabel);
+  identityText.append(heading);
   identity.append(identityText);
   const tools = document.createElement('div');
   tools.className = 'conversation-tools';
-  const modelChip = document.createElement('span');
-  modelChip.className = 'model-chip';
-  modelChip.title = conversationModelName(state.currentConversation);
-  modelChip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg>';
-  modelChip.append(document.createTextNode(conversationModelName(state.currentConversation)));
-  const memoryToggle = iconButton(
-    state.memoryEnabled ? '记忆已开启' : '记忆已关闭',
-    '<path d="M12 4a3 3 0 0 1 3 3v1a3.5 3.5 0 0 1 0 7v1a3 3 0 1 1-6 0v-1a3.5 3.5 0 0 1 0-7V7a3 3 0 0 1 3-3Z"/><path d="M12 8v8"/>',
-    `icon-button${state.memoryEnabled ? ' active' : ''}`,
-  );
-  memoryToggle.setAttribute('aria-pressed', String(state.memoryEnabled));
-  memoryToggle.addEventListener('click', async () => {
-    const next = !state.memoryEnabled;
-    try {
-      await window.desktop.agent.memorySet(state.memoryBaseUrl, next);
-      state.memoryEnabled = next;
-      memoryToggle.classList.toggle('active', next);
-      memoryToggle.title = next ? '记忆已开启' : '记忆已关闭';
-      memoryToggle.setAttribute('aria-pressed', String(next));
-    } catch (error) {
-      showError(error.message);
-    }
-  });
-  const editContact = iconButton('联系人设置', '<path d="M4 20h4l10-10-4-4L4 16v4Z"/><path d="m13 5 4 4"/>');
-  editContact.addEventListener('click', () => openConversationEditor(state.currentConversation));
-  tools.append(modelChip, memoryToggle, editContact);
-  toolbar.append(identity, tools);
+  toolbar.append(identity);
   main.append(toolbar);
   const stream = document.createElement('div');
   stream.id = 'message-stream';
@@ -696,7 +704,6 @@ function renderConversation() {
   const form = document.createElement('form');
   form.className = 'message-form';
   const input = document.createElement('textarea');
-  input.placeholder = '输入消息，Enter 发送，Shift+Enter 换行';
   input.disabled = state.agentBusy || onboardingNeeded();
   input.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -704,25 +711,14 @@ function renderConversation() {
       form.requestSubmit();
     }
   });
-  const send = button(state.agentBusy ? '生成中…' : '发送', 'button');
+  const send = button('发送', 'button');
   send.disabled = state.agentBusy || onboardingNeeded();
   form.append(input, send);
-  if (state.agentBusy) {
-    const stop = button('停止', 'button stop-button');
-    stop.addEventListener('click', async () => {
-      if (state.agentTicketId) await window.desktop.agent.chatAbort(state.agentTicketId);
-    });
-    form.append(stop);
-  }
   form.addEventListener('submit', event => {
     event.preventDefault();
     startAgentChat(input.value);
   });
   main.append(form);
-  const hint = document.createElement('div');
-  hint.className = 'conversation-hint';
-  hint.textContent = '提示：模型输出会按最小 Markdown 规则显示；头像、模型、语气与号码都在联系人设置里调整。';
-  main.append(hint);
   layout.append(list, main);
   content.append(layout);
   renderConversationMessages();
@@ -734,6 +730,8 @@ function openConversationEditor(item) {
   let pendingAvatar = settings.avatar || state.avatars.ai || 'preset-1';
   let pendingModel = settings.model || '';
   let pendingTone = settings.toneId || '';
+  let pendingPersona = settings.persona || '';
+  let pendingToneText = settings.tone || '';
 
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -798,23 +796,14 @@ function openConversationEditor(item) {
     modelSelect.append(option);
   });
 
-  const toneSelect = document.createElement('select');
-  const globalTone = document.createElement('option');
-  globalTone.value = '';
-  globalTone.textContent = '跟随全局语气';
-  toneSelect.append(globalTone);
-  state.tones.forEach(tone => {
-    const option = document.createElement('option');
-    option.value = tone.id;
-    option.textContent = tone.name;
-    option.selected = tone.id === pendingTone;
-    toneSelect.append(option);
-  });
-
-  const styleInput = document.createElement('input');
-  styleInput.value = settings.style || '';
-  styleInput.maxLength = 200;
-  styleInput.placeholder = '例如：多用短句，偶尔讲冷笑话';
+  const personaInput = document.createElement('textarea');
+  personaInput.value = pendingPersona || (settings.style ? `说话风格：${settings.style}` : '');
+  personaInput.maxLength = 2000;
+  personaInput.rows = 4;
+  const toneInput = document.createElement('textarea');
+  toneInput.value = pendingToneText;
+  toneInput.maxLength = 2000;
+  toneInput.rows = 4;
 
   const numberInput = document.createElement('input');
   numberInput.inputMode = 'numeric';
@@ -830,9 +819,9 @@ function openConversationEditor(item) {
     fieldWrap('联系人名称', nameInput),
     avatarField,
     fieldWrap('使用的模型', modelSelect),
-    fieldWrap('语气', toneSelect),
-    fieldWrap('说话风格', styleInput, '会追加到人设的说话风格里，只影响这个联系人。'),
-    fieldWrap('电话号码', numberInput, '用于电话样式的头像与拨号界面。'),
+    fieldWrap('人设', personaInput, '自由描述这个联系人的身份、性格和回应方式。'),
+    fieldWrap('语气', toneInput, '留空时使用设置页的全局默认语气。'),
+    fieldWrap('电话号码', numberInput),
   );
 
   const actions = document.createElement('div');
@@ -865,8 +854,9 @@ function openConversationEditor(item) {
         title,
         avatar: pendingAvatar,
         model: modelSelect.value,
-        toneId: toneSelect.value,
-        style: styleInput.value.trim(),
+        toneId: pendingTone,
+        persona: personaInput.value.trim(),
+        tone: toneInput.value.trim(),
         number: digits,
       });
       if (state.currentConversation?.id === item.id) state.currentConversation = updated;
@@ -878,7 +868,43 @@ function openConversationEditor(item) {
       save.disabled = false;
       showError(error.message);
     }
+
   });
+}
+
+function openDeleteConfirm(item) {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      const modal = document.createElement('div');
+      modal.className = 'modal delete-confirm-modal';
+      modal.innerHTML = `<h2>删除联系人</h2><p>确定删除“${escapeHtml(item.title || '新对话')}”吗？聊天记录也会被删除。</p>`;
+      const actions = document.createElement('div');
+      actions.className = 'modal-actions';
+      const cancel = button('取消', 'button button-quiet');
+      const confirm = button('删除', 'button button-danger');
+      cancel.addEventListener('click', () => backdrop.remove());
+      confirm.addEventListener('click', async () => {
+        confirm.disabled = true;
+        try {
+          await window.desktop.agent.conversationDelete(item.id);
+          state.conversations = await window.desktop.agent.conversationList();
+          if (state.currentConversation?.id === item.id) {
+            state.currentConversation = state.conversations.length
+              ? await window.desktop.agent.conversationLoad(state.conversations[0].id)
+              : await window.desktop.agent.conversationNew('新联系人');
+            state.conversations = await window.desktop.agent.conversationList();
+          }
+          backdrop.remove();
+          renderConversation();
+        } catch (error) {
+          confirm.disabled = false;
+          showError(error.message);
+        }
+      });
+      actions.append(cancel, confirm);
+      modal.append(actions);
+      backdrop.append(modal);
+  document.body.append(backdrop);
 }
 
 async function startAgentChat(text) {
@@ -1073,6 +1099,8 @@ function openCallView(shell, item) {
     avatar: settings.avatar || state.avatars.ai || 'preset-1',
     model: sameProvider ? provider.model : '',
     style: settings.style || '',
+    persona: settings.persona || '',
+    tone: settings.tone || '',
     wave: state.chat.waveform !== false,
   };
   shell.replaceChildren();
@@ -1106,12 +1134,10 @@ function openCallView(shell, item) {
 
 async function renderSettings() {
   const settings = await window.desktop.app.settings.get();
-  const persona = { ...(settings.persona || {}) };
   const savedAvatar = settings.avatar || 'preset-1';
   const savedUserAvatar = settings.userAvatar || 'preset-4';
   state.avatars = { ai: savedAvatar, user: savedUserAvatar };
   state.chat = {
-    phoneStyle: settings.phoneStyle !== false,
     waveform: settings.waveform !== false,
   };
   const prefRow = (labelText, hint, checked, onToggle) => {
@@ -1145,14 +1171,6 @@ async function renderSettings() {
     row.append(text, toggle);
     return row;
   };
-  const defaultPersona = {
-    name: 'Earshot',
-    self: '我',
-    user: '你',
-    personality: '认真、温和、可靠',
-    style: '清楚、自然、简洁',
-    taboo: '',
-  };
   const info = (message) => {
     const node = document.createElement('span');
     node.className = 'setting-info';
@@ -1185,37 +1203,6 @@ async function renderSettings() {
   });
   appearance.append(themeOptions);
   content.append(appearance);
-
-  const personaCard = document.createElement('section');
-  personaCard.className = 'settings-card settings-section';
-  personaCard.innerHTML = '<h2>人设</h2>';
-  const personaForm = document.createElement('form');
-  personaForm.className = 'persona-form';
-  [['name', '名字'], ['self', '自称'], ['user', '怎么称呼你'], ['personality', '性格'], ['style', '说话风格'], ['taboo', '禁忌话题']].forEach(([name, label]) => {
-    const row = document.createElement('label');
-    row.className = 'persona-row';
-    row.innerHTML = `<span>${label}</span><input name="${name}" value="${String(persona[name] || '').replace(/"/g, '&quot;')}">`;
-    personaForm.append(row);
-  });
-  const personaActions = document.createElement('div');
-  personaActions.className = 'settings-actions';
-  const personaSave = button('保存');
-  const personaReset = button('恢复默认', 'button button-quiet');
-  personaReset.addEventListener('click', () => {
-    Object.assign(persona, defaultPersona);
-    personaForm.querySelectorAll('input').forEach(input => { input.value = persona[input.name] || ''; });
-  });
-  personaSave.addEventListener('click', async event => {
-    event.preventDefault();
-    const nextPersona = Object.fromEntries(new FormData(personaForm));
-    await window.desktop.app.settings.save({ persona: nextPersona });
-    personaSave.textContent = '已保存';
-    setTimeout(() => { personaSave.textContent = '保存'; }, 1200);
-  });
-  personaActions.append(personaSave, personaReset);
-  personaForm.append(personaActions);
-  personaCard.append(personaForm);
-  content.append(personaCard);
 
   const avatarCard = document.createElement('section');
   avatarCard.className = 'settings-card settings-section';
@@ -1261,25 +1248,26 @@ async function renderSettings() {
   toneCard.innerHTML = '<h2>语气</h2>';
   const toneHint = document.createElement('p');
   toneHint.className = 'settings-note';
-  toneHint.textContent = '默认语气用于没有单独设置的联系人。';
-  const toneOptionsEl = document.createElement('div');
-  toneOptionsEl.className = 'tone-options';
-  state.tones.forEach(tone => {
-    const option = button(tone.name, `tone-option${tone.id === state.activeToneId ? ' selected' : ''}`);
-    option.title = tone.description || tone.systemPrompt || '';
-    option.addEventListener('click', async () => {
-      try {
-        await window.desktop.app.settings.save({ toneId: tone.id });
-        state.activeToneId = tone.id;
-        toneOptionsEl.querySelectorAll('.tone-option').forEach(node => node.classList.toggle('selected', node === option));
-        showMessage(`默认语气：${tone.name}`);
-      } catch (error) {
-        showError(error.message);
-      }
-    });
-    toneOptionsEl.append(option);
+  toneHint.textContent = '默认语气用于没有单独设置语气的联系人。';
+  const toneInput = document.createElement('textarea');
+  toneInput.rows = 5;
+  toneInput.maxLength = 2000;
+  toneInput.value = settings.toneText || '';
+  toneInput.placeholder = '例如：自然、口语化，像熟人聊天一样回答。';
+  const toneSave = button('保存');
+  toneSave.addEventListener('click', async () => {
+    try {
+      await window.desktop.app.settings.save({ toneText: toneInput.value });
+      toneSave.textContent = '已保存';
+      setTimeout(() => { toneSave.textContent = '保存'; }, 1200);
+    } catch (error) {
+      showError(error.message);
+    }
   });
-  toneCard.append(toneHint, toneOptionsEl);
+  const toneActions = document.createElement('div');
+  toneActions.className = 'settings-actions';
+  toneActions.append(toneSave);
+  toneCard.append(toneHint, toneInput, toneActions);
   content.append(toneCard);
 
   const callCard = document.createElement('section');
@@ -1288,11 +1276,6 @@ async function renderSettings() {
   const callPrefs = document.createElement('div');
   callPrefs.className = 'pref-list';
   callPrefs.append(
-    prefRow('聊天界面使用电话样式', '联系人头像、号码与消息气泡按电话界面排布', state.chat.phoneStyle, async checked => {
-      await window.desktop.app.settings.save({ phoneStyle: checked });
-      state.chat.phoneStyle = checked;
-      renderSettings();
-    }),
     prefRow('通话中显示波形线', '关闭后通话页只保留状态与按钮', state.chat.waveform, async checked => {
       await window.desktop.app.settings.save({ waveform: checked });
       state.chat.waveform = checked;
@@ -1306,7 +1289,7 @@ async function renderSettings() {
   contactCard.innerHTML = '<h2>联系人</h2>';
   const contactNote = document.createElement('p');
   contactNote.className = 'settings-note';
-  contactNote.textContent = '每个联系人可以有自己的头像、模型、语气、说话风格与号码。';
+  contactNote.textContent = '每个联系人可以有自己的头像、模型、人设、语气与号码。';
   const contactList = document.createElement('div');
   contactList.className = 'settings-contacts';
   if (!state.conversations.length) {
@@ -1668,7 +1651,6 @@ async function bootstrapUi() {
       user: settings?.userAvatar || 'preset-4',
     };
     state.chat = {
-      phoneStyle: settings?.phoneStyle !== false,
       waveform: settings?.waveform !== false,
     };
     if (settings?.toneId) state.activeToneId = settings.toneId;

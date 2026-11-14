@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -148,12 +148,20 @@ function startAgentChat(conversationId, userText) {
       const conversation = conversationStore.append(conversationId, { role: 'user', content: userText });
       agentEvent({ type: 'started', conversationId, ticketId, message: userText });
       const conversationSettings = conversation.settings || {};
-      const tone = toneOptions.find(item => item.id === (conversationSettings.toneId || config.activeToneId))
+      const effectiveTone = conversationSettings.tone || config.toneText || '';
+      const effectivePersona = conversationSettings.persona || config.persona;
+      const tone = effectiveTone || toneOptions.find(item => item.id === (conversationSettings.toneId || config.activeToneId))
         || toneOptions.find(item => item.id === config.activeToneId)
         || toneOptions[0];
-      const persona = { ...(config.persona || {}) };
+      let persona = effectivePersona && typeof effectivePersona === 'object'
+        ? { ...effectivePersona }
+        : effectivePersona;
       if (conversationSettings.style) {
-        persona.style = [persona.style, conversationSettings.style].filter(Boolean).join('；');
+        if (typeof persona === 'string') {
+          persona = `${persona}\n说话风格：${conversationSettings.style}`;
+        } else {
+          persona.style = [persona.style, conversationSettings.style].filter(Boolean).join('；');
+        }
       }
       const memories = await recallMemories({
         memoryBaseUrl: config.memoryBaseUrl,
@@ -565,6 +573,7 @@ function registerIpc() {
     phoneStyle: config.phoneStyle !== false,
     waveform: config.waveform !== false,
     toneId: config.activeToneId || '',
+    toneText: config.toneText || '',
   }));
   ipcMain.handle('settings:save', (_event, patch) => {
     if (!patch || typeof patch !== 'object') throw new Error('设置参数无效');
@@ -575,6 +584,10 @@ function registerIpc() {
     if (typeof patch.theme === 'string' && ['deep-space', 'mono-light', 'warm-night', 'contrast'].includes(patch.theme)) next.theme = patch.theme;
     if (typeof patch.phoneStyle === 'boolean') next.phoneStyle = patch.phoneStyle;
     if (typeof patch.waveform === 'boolean') next.waveform = patch.waveform;
+    if (patch.toneText !== undefined) {
+      if (typeof patch.toneText !== 'string' || patch.toneText.length > 2000) throw new Error('全局语气需要是 2000 字以内的文本');
+      next.toneText = patch.toneText;
+    }
     if (typeof patch.toneId === 'string' && toneOptions.some(item => item.id === patch.toneId)) next.activeToneId = patch.toneId;
     config = next;
     writeConfig(app, config, safeStorage);
@@ -586,6 +599,7 @@ function registerIpc() {
       phoneStyle: config.phoneStyle !== false,
       waveform: config.waveform !== false,
       toneId: config.activeToneId || '',
+      toneText: config.toneText || '',
     };
   });
   ipcMain.handle('agent:tones', () => ({ tones: toneOptions, activeToneId: config.activeToneId }));
@@ -643,6 +657,11 @@ function registerIpc() {
       && !/^(?:preset-[1-6]|data:image\/[a-z+]+;base64,)/i.test(String(patch.avatar))) {
       throw new Error('头像格式无效');
     }
+    for (const key of ['persona', 'tone']) {
+      if (patch[key] !== undefined && (typeof patch[key] !== 'string' || patch[key].length > 2000)) {
+        throw new Error(`${key === 'persona' ? '人设' : '语气'}需要是 2000 字以内的文本`);
+      }
+    }
     return conversationStore.update(input.id, patch);
   });
   ipcMain.handle('agent:memory-get', () => ({
@@ -694,7 +713,10 @@ if (!gotLock) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(bootstrap);
+  app.whenReady().then(() => {
+    Menu.setApplicationMenu(null);
+    return bootstrap();
+  });
   app.on('before-quit', event => {
     if (shutdownStarted) return;
     shutdownStarted = true;

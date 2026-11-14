@@ -16,6 +16,7 @@ const DEFAULT_CONFIG = {
   profiles: [],
   activeProfileId: '',
   activeToneId: 'gentle-companion',
+  toneText: '',
   memoryBaseUrl: '',
   memoryEnabled: false,
   providerKeys: {},
