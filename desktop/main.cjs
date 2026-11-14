@@ -440,6 +440,7 @@ function registerIpc() {
     return { profiles: config.profiles, activeProfileId: config.activeProfileId };
   });
   ipcMain.handle('app:get-meta', () => ({
+    version: app.getVersion(),
     port: servicePort,
     configPath: configPath(app),
     logPath: logFile,

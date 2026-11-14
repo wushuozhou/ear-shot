@@ -642,14 +642,22 @@ function renderCall() {
   shell.className = 'call-shell';
   const heading = document.createElement('div');
   heading.className = 'page-heading';
-  heading.innerHTML = '<div><h1>通话</h1><p>按住说话，Earshot 会边听边回应。</p></div>';
+  heading.innerHTML = '<div><h1>通话</h1></div>';
   shell.append(heading);
   if (state.service.status === 'ready' && state.meta?.port) {
-    const view = document.createElement('webview');
-    view.id = 'call-view';
-    view.setAttribute('partition', 'persist:earshot-call');
-    view.src = `http://127.0.0.1:${state.meta.port}`;
-    shell.append(view);
+    const empty = document.createElement('div');
+    empty.className = 'settings-card call-empty';
+    const start = button('开始通话', 'button');
+    start.addEventListener('click', () => {
+      empty.remove();
+      const view = document.createElement('webview');
+      view.id = 'call-view';
+      view.setAttribute('partition', 'persist:earshot-call');
+      view.src = `http://127.0.0.1:${state.meta.port}`;
+      shell.append(view);
+    });
+    empty.append(start);
+    shell.append(empty);
   } else {
     const empty = document.createElement('div');
     empty.className = 'settings-card call-empty';
@@ -672,66 +680,200 @@ function renderCall() {
   content.append(shell);
 }
 
-function renderSettings() {
+async function renderSettings() {
+  const settings = await window.desktop.settings.get();
+  const persona = { ...(settings.persona || {}) };
+  const savedAvatar = settings.avatar || 'preset-1';
+  const defaultPersona = {
+    name: 'Earshot',
+    self: '我',
+    user: '你',
+    personality: '认真、温和、可靠',
+    style: '清楚、自然、简洁',
+    taboo: '',
+  };
+  const info = (message) => {
+    const node = document.createElement('span');
+    node.className = 'setting-info';
+    node.title = message;
+    node.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></svg>';
+    return node;
+  };
   content.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'page-heading';
-  heading.innerHTML = '<div><h1>设置</h1><p>这里可以查看路径、服务状态和本机存储方式。</p></div>';
+  heading.innerHTML = '<div><h1>设置</h1></div>';
   content.append(heading);
-  const card = document.createElement('section');
-  card.className = 'settings-card settings-grid';
-  const rows = [
-    ['配置文件路径', state.meta?.configPath || ''],
-    ['日志目录', state.meta?.logPath || ''],
-    ['当前端口', state.meta?.port || '未启动'],
-  ];
-  rows.forEach(([label, value]) => card.append(settingRow(label, value)));
-  const dataRow = document.createElement('div');
-  dataRow.className = 'setting-row';
-  const dataLabel = document.createElement('div');
-  dataLabel.className = 'setting-label';
-  dataLabel.textContent = '数据目录';
-  const dataInput = document.createElement('input');
-  dataInput.value = state.meta?.dataDir || '';
-  dataInput.placeholder = '留空使用默认目录';
-  const save = button('保存', 'button button-quiet button-small');
-  save.addEventListener('click', async () => {
-    save.disabled = true;
-    try {
-      await window.desktop.app.setDataDir(dataInput.value);
-      showMessage('数据目录已保存。');
-      await refresh();
-    } catch (error) {
-      showError(error.message);
-    } finally {
-      save.disabled = false;
-    }
+  const appearance = document.createElement('section');
+  appearance.className = 'settings-card settings-section';
+  appearance.innerHTML = '<h2>外观</h2>';
+  const themeOptions = document.createElement('div');
+  themeOptions.className = 'theme-options';
+  [['deep-space', '深空'], ['mono-light', '浅色'], ['warm-night', '暖夜'], ['contrast', '高对比']].forEach(([theme, label]) => {
+    const option = button('', 'theme-option');
+    option.dataset.theme = theme;
+    option.classList.toggle('selected', document.documentElement.dataset.theme === theme);
+    option.innerHTML = `<span class="theme-swatch"></span><strong>${label}</strong>${option.classList.contains('selected') ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>' : ''}`;
+    option.addEventListener('click', async () => {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('earshot:theme', theme);
+      await window.desktop.settings.save({ theme });
+      renderSettings();
+    });
+    themeOptions.append(option);
   });
-  dataRow.append(dataLabel, dataInput, save);
-  card.append(dataRow);
-  card.append(settingRow('密钥存储方式', state.meta?.storage || ''));
-  const actions = document.createElement('div');
-  actions.className = 'modal-actions';
+  appearance.append(themeOptions);
+  content.append(appearance);
+
+  const personaCard = document.createElement('section');
+  personaCard.className = 'settings-card settings-section';
+  personaCard.innerHTML = '<h2>人设</h2>';
+  const personaForm = document.createElement('form');
+  personaForm.className = 'persona-form';
+  [['name', '名字'], ['self', '自称'], ['user', '怎么称呼你'], ['personality', '性格'], ['style', '说话风格'], ['taboo', '禁忌话题']].forEach(([name, label]) => {
+    const row = document.createElement('label');
+    row.className = 'persona-row';
+    row.innerHTML = `<span>${label}</span><input name="${name}" value="${String(persona[name] || '').replace(/"/g, '&quot;')}">`;
+    personaForm.append(row);
+  });
+  const personaActions = document.createElement('div');
+  personaActions.className = 'settings-actions';
+  const personaSave = button('保存');
+  const personaReset = button('恢复默认', 'button button-quiet');
+  personaReset.addEventListener('click', () => {
+    Object.assign(persona, defaultPersona);
+    personaForm.querySelectorAll('input').forEach(input => { input.value = persona[input.name] || ''; });
+  });
+  personaSave.addEventListener('click', async event => {
+    event.preventDefault();
+    const nextPersona = Object.fromEntries(new FormData(personaForm));
+    await window.desktop.settings.save({ persona: nextPersona });
+    personaSave.textContent = '已保存';
+    setTimeout(() => { personaSave.textContent = '保存'; }, 1200);
+  });
+  personaActions.append(personaSave, personaReset);
+  personaForm.append(personaActions);
+  personaCard.append(personaForm);
+  content.append(personaCard);
+
+  const avatarCard = document.createElement('section');
+  avatarCard.className = 'settings-card settings-section';
+  avatarCard.innerHTML = '<h2>形象</h2>';
+  const avatarLayout = document.createElement('div');
+  avatarLayout.className = 'avatar-layout';
+  const avatarMain = document.createElement('div');
+  avatarMain.className = 'avatar-main';
+  const avatarTabs = document.createElement('div');
+  avatarTabs.className = 'avatar-tabs';
+  const presetTab = button('预设', 'button button-quiet selected');
+  const uploadTab = button('上传', 'button button-quiet');
+  avatarTabs.append(presetTab, uploadTab);
+  const avatarPreview = document.createElement('div');
+  avatarPreview.className = 'avatar-preview';
+  const setAvatarPreview = value => {
+    avatarPreview.className = 'avatar-preview';
+    if (value.startsWith('data:image/')) avatarPreview.style.backgroundImage = `url("${value}")`;
+    else avatarPreview.classList.add(value);
+  };
+  setAvatarPreview(savedAvatar);
+  const presetPanel = document.createElement('div');
+  presetPanel.className = 'avatar-panel avatar-presets';
+  let pendingAvatar = savedAvatar;
+  for (let index = 1; index <= 6; index += 1) {
+    const preset = button('', `avatar-preset preset-${index}${savedAvatar === `preset-${index}` ? ' selected' : ''}`);
+    preset.title = `预设 ${index}`;
+    preset.addEventListener('click', () => {
+      pendingAvatar = `preset-${index}`;
+      presetPanel.querySelectorAll('.avatar-preset').forEach(item => item.classList.remove('selected'));
+      preset.classList.add('selected');
+      setAvatarPreview(pendingAvatar);
+    });
+    presetPanel.append(preset);
+  }
+  const uploadPanel = document.createElement('div');
+  uploadPanel.className = 'avatar-panel avatar-upload hidden';
+  const uploadInput = document.createElement('input');
+  uploadInput.type = 'file';
+  uploadInput.accept = 'image/*';
+  const uploadDrop = document.createElement('label');
+  uploadDrop.className = 'avatar-drop';
+  uploadDrop.textContent = '选择图片或拖入';
+  uploadDrop.append(uploadInput);
+  const readImage = file => {
+    if (!file || !file.type.startsWith('image/')) return;
+    if (file.size > 2 * 1024 * 1024) {
+      showError('图片超过 2MB，请先压缩');
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      pendingAvatar = String(reader.result);
+      setAvatarPreview(pendingAvatar);
+    });
+    reader.readAsDataURL(file);
+  };
+  uploadInput.addEventListener('change', () => readImage(uploadInput.files?.[0]));
+  uploadDrop.addEventListener('dragover', event => { event.preventDefault(); uploadDrop.classList.add('dragging'); });
+  uploadDrop.addEventListener('dragleave', () => uploadDrop.classList.remove('dragging'));
+  uploadDrop.addEventListener('drop', event => {
+    event.preventDefault();
+    uploadDrop.classList.remove('dragging');
+    readImage(event.dataTransfer.files?.[0]);
+  });
+  uploadPanel.append(uploadDrop);
+  const setAvatarPanel = upload => {
+    presetPanel.classList.toggle('hidden', upload);
+    uploadPanel.classList.toggle('hidden', !upload);
+    presetTab.classList.toggle('selected', !upload);
+    uploadTab.classList.toggle('selected', upload);
+  };
+  presetTab.addEventListener('click', () => setAvatarPanel(false));
+  uploadTab.addEventListener('click', () => setAvatarPanel(true));
+  avatarMain.append(avatarTabs, presetPanel, uploadPanel);
+  const avatarSide = document.createElement('div');
+  avatarSide.className = 'avatar-side';
+  avatarSide.append(avatarPreview);
+  const avatarSave = button('保存');
+  const avatarReset = button('恢复默认', 'button button-quiet');
+  avatarSave.addEventListener('click', async () => {
+    await window.desktop.settings.save({ avatar: pendingAvatar });
+    avatarSave.textContent = '已保存';
+    setTimeout(() => { avatarSave.textContent = '保存'; }, 1200);
+  });
+  avatarReset.addEventListener('click', () => {
+    pendingAvatar = 'preset-1';
+    setAvatarPreview(pendingAvatar);
+    presetPanel.querySelectorAll('.avatar-preset').forEach(item => item.classList.toggle('selected', item.classList.contains('preset-1')));
+  });
+  avatarSide.append(avatarSave, avatarReset);
+  avatarLayout.append(avatarMain, avatarSide);
+  avatarCard.append(avatarLayout);
+  content.append(avatarCard);
+
+  const storageCard = document.createElement('section');
+  storageCard.className = 'settings-card settings-section';
+  storageCard.innerHTML = '<h2>存储</h2>';
+  [['配置文件路径', state.meta?.configPath || ''], ['日志目录', state.meta?.logPath || ''], ['当前端口', state.meta?.port || '未启动'], ['密钥存储方式', state.meta?.storage || ''], ['数据目录', state.meta?.dataDir || '']].forEach(([label, value]) => storageCard.append(settingRow(label, value)));
+  const storageActions = document.createElement('div');
+  storageActions.className = 'settings-actions';
   const config = button('打开配置目录', 'button button-quiet');
   config.addEventListener('click', () => window.desktop.app.openPath('config'));
   const restart = button('重启服务', 'button');
+  restart.title = '重启服务会中断当前通话';
   restart.addEventListener('click', async () => {
+    if (!window.confirm('重启服务会中断当前通话，是否继续？')) return;
     restart.disabled = true;
     try { await window.desktop.app.restartService(); } catch (error) { showError(error.message); }
     finally { restart.disabled = false; }
   });
-  actions.append(config, restart);
-  card.append(actions);
-  const help = document.createElement('div');
-  help.className = 'setting-help';
-  help.textContent = '安装目录由安装程序选择。数据目录可以改到你方便备份的位置；修改供应商或路径后，请重启服务使设置生效。';
-  card.append(help);
-  content.append(card);
+  storageActions.append(config, restart);
+  storageCard.append(storageActions, info('安装目录由安装程序选择；修改供应商或路径后，请重启服务使设置生效。'));
+  content.append(storageCard);
 
   const memoryCard = document.createElement('section');
-  memoryCard.className = 'settings-card settings-grid';
+  memoryCard.className = 'settings-card settings-section settings-grid';
   const memoryTitle = document.createElement('h2');
-  memoryTitle.textContent = '外部记忆服务';
+  memoryTitle.textContent = '记忆';
   memoryCard.append(memoryTitle);
   const memoryRow = document.createElement('div');
   memoryRow.className = 'setting-row';
@@ -781,11 +923,13 @@ function renderSettings() {
   });
   memoryUrlRow.append(memoryUrlLabel, memoryUrl, testMemory);
   memoryCard.append(memoryUrlRow, testResult);
-  const memoryHelp = document.createElement('div');
-  memoryHelp.className = 'setting-help';
-  memoryHelp.textContent = '关闭时不会请求记忆服务。开启后，每轮对话前召回相关内容，结束后保存本轮摘要；记忆服务默认使用本机 8765 端口。';
-  memoryCard.append(memoryHelp);
+  memoryCard.append(info('关闭时不会请求记忆服务。开启后，每轮对话前召回相关内容，结束后保存本轮摘要；记忆服务默认使用本机 8765 端口。'));
   content.append(memoryCard);
+
+  const about = document.createElement('section');
+  about.className = 'settings-card settings-section about-settings';
+  about.innerHTML = `<h2>关于</h2><div class="about-row"><span>版本</span><strong>${state.meta?.version || ''}</strong></div><div class="about-row"><span>GitHub 仓库</span><a href="https://github.com/wushuozhou/ear-shot">打开链接</a></div><div class="about-row"><span>许可证</span><a href="../../LICENSE">查看许可证</a></div>`;
+  content.append(about);
 }
 
 function settingRow(label, value) {
