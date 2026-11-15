@@ -19,6 +19,16 @@ const state = {
   draft: '',
   chat: { waveform: true },
   avatars: { ai: 'preset-1', user: 'preset-4' },
+  selectMode: false,
+  selected: new Set(),
+  recording: null,
+  aiVoiceReply: false,
+  chatBackground: '',
+  callBackground: '',
+  favorites: [],
+  callLog: [],
+  callTab: 'recents',
+  dialNumber: '',
 };
 
 const ACTIVE_CONVERSATION_KEY = 'earshot:active-conversation';
@@ -229,11 +239,13 @@ function stripStageDirections(value) {
 
 function renderTop() {
   const status = statusLabel(state.service.status);
-  $('#top-status').textContent = status;
-  $('#top-status').className = `status-pill status-${state.service.status === 'ready' ? 'ready' : state.service.status === 'failed' ? 'failed' : 'starting'}`;
-  $('#sidebar-status').textContent = status;
-  $('#sidebar-dot').className = state.service.status === 'ready' ? 'ready' : state.service.status === 'failed' ? 'failed' : '';
+  // 顶栏已移除，服务状态只在侧边栏底部显示。
+  const sidebarStatus = $('#sidebar-status');
+  if (sidebarStatus) sidebarStatus.textContent = status;
+  const dot = $('#sidebar-dot');
+  if (dot) dot.className = state.service.status === 'ready' ? 'ready' : state.service.status === 'failed' ? 'failed' : '';
   const notice = $('#notice');
+  if (!notice) return;
   notice.textContent = state.service.status === 'failed' ? state.service.message || '服务启动失败' : '';
   notice.classList.toggle('hidden', state.service.status !== 'failed');
 }
@@ -335,6 +347,8 @@ function avatarPicker(initial, onChange, fallback = 'preset-1') {
 function formatNumber(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.length === 11) return `${digits.slice(0, 3)} ${digits.slice(3, 7)} ${digits.slice(7)}`;
+  // 不足 8 位时整段显示，避免输入过程中出现 "1380 0" 这种奇怪断字。
+  if (digits.length < 8) return digits;
   return digits.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
 }
 
@@ -558,6 +572,105 @@ function openQuickConnectForm() {
   });
 }
 
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDuration(ms) {
+  const total = Math.round((Number(ms) || 0) / 1000);
+  const minute = Math.floor(total / 60);
+  const second = total % 60;
+  return minute ? `${minute}:${String(second).padStart(2, '0')}` : `${second}"`;
+}
+
+// 语音条：点一下播放，宽度随时长变化，和微信一致。
+function voiceBubble(message) {
+  const wrap = document.createElement('button');
+  wrap.type = 'button';
+  wrap.className = 'voice-bubble';
+  const seconds = Math.max(1, Math.round((message.attachment?.durationMs || 0) / 1000));
+  wrap.style.minWidth = `${Math.min(190, 72 + seconds * 6)}px`;
+  const icon = document.createElement('span');
+  icon.className = 'voice-icon';
+  icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg>';
+  const label = document.createElement('span');
+  label.textContent = formatDuration(message.attachment?.durationMs || 0);
+  wrap.append(icon, label);
+  let audio = null;
+  wrap.addEventListener('click', event => {
+    event.stopPropagation();
+    if (audio && !audio.paused) {
+      audio.pause();
+      wrap.classList.remove('playing');
+      return;
+    }
+    audio = new Audio(message.attachment?.dataUrl || '');
+    wrap.classList.add('playing');
+    audio.addEventListener('ended', () => wrap.classList.remove('playing'));
+    audio.addEventListener('error', () => {
+      wrap.classList.remove('playing');
+      showError('这段语音播放失败');
+    });
+    audio.play().catch(() => wrap.classList.remove('playing'));
+  });
+  // 语音下面附上转写出来的文字，方便回看。
+  if (String(message.content || '').trim()) {
+    const box = document.createElement('div');
+    box.className = 'voice-wrap';
+    const text = document.createElement('div');
+    text.className = 'voice-text';
+    text.textContent = message.content;
+    box.append(wrap, text);
+    return box;
+  }
+  return wrap;
+}
+
+function attachmentBubble(message) {
+  const attachment = message.attachment || {};
+  if (message.kind === 'voice') return voiceBubble(message);
+  if (message.kind === 'image') {
+    const box = document.createElement('div');
+    box.className = 'message-image-box';
+    const image = document.createElement('img');
+    image.className = 'message-image';
+    image.src = attachment.dataUrl;
+    image.alt = attachment.name || '图片';
+    image.loading = 'lazy';
+    // 图片坏掉时给个明确占位，不要留一块空白灰块。
+    image.addEventListener('error', () => {
+      box.classList.add('broken');
+      box.textContent = `图片打不开：${attachment.name || '未命名'}`;
+    });
+    box.append(image);
+    return box;
+  }
+  if (message.kind === 'video') {
+    const video = document.createElement('video');
+    video.className = 'message-video';
+    video.src = attachment.dataUrl;
+    video.controls = true;
+    video.preload = 'metadata';
+    return video;
+  }
+  const file = document.createElement('div');
+  file.className = 'message-file';
+  const icon = document.createElement('span');
+  icon.className = 'message-file-icon';
+  icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 3v5h5"/><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/></svg>';
+  const text = document.createElement('div');
+  const name = document.createElement('strong');
+  name.textContent = attachment.name || '文件';
+  const size = document.createElement('span');
+  size.textContent = formatBytes(attachment.size);
+  text.append(name, size);
+  file.append(icon, text);
+  return file;
+}
+
 function renderConversationMessages() {
   const stream = $('#message-stream');
   if (!stream) return;
@@ -566,20 +679,46 @@ function renderConversationMessages() {
   if (onboardingNeeded()) {
     const empty = document.createElement('div');
     empty.className = 'message-empty';
-    empty.innerHTML = '<div><strong>先完成首次设置</strong>请先到「供应商」页选择套餐、填写 Key 并测试连接，完成后就可以开始聊天。</div>';
+    empty.innerHTML = '<div><strong>先完成首次设置</strong>请先到「设置 → 供应商」选择套餐、填写 Key 并测试连接，完成后就可以开始聊天。</div>';
     stream.append(empty);
     return;
   }
   const assistantAvatar = conversationAvatar(state.currentConversation);
-  const rowFor = (role, content) => {
+  const rowFor = (message, streaming = false) => {
+    const role = message.role;
     const row = document.createElement('div');
     row.className = `message-row ${role === 'user' ? 'user' : 'assistant'}`;
     const bubble = document.createElement('div');
-    bubble.className = 'message-bubble';
-    bubble.innerHTML = renderMarkdown(stripStageDirections(content));
+    bubble.className = `message-bubble${message.kind && message.kind !== 'text' ? ' message-bubble-media' : ''}`;
+    if (!message.kind || message.kind === 'text') {
+      bubble.innerHTML = renderMarkdown(stripStageDirections(message.content));
+    } else {
+      bubble.append(attachmentBubble(message));
+    }
     const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar');
     if (role === 'user') row.append(bubble, avatar);
     else row.append(avatar, bubble);
+    // 多选模式下，整行可勾选用来批量收藏。
+    if (state.selectMode && !streaming && message.id) {
+      row.classList.add('selectable');
+      const checked = state.selected.has(message.id);
+      row.classList.toggle('selected', checked);
+      const mark = document.createElement('span');
+      mark.className = 'message-check';
+      mark.textContent = checked ? '✓' : '';
+      row.prepend(mark);
+      row.addEventListener('click', () => {
+        if (state.selected.has(message.id)) state.selected.delete(message.id);
+        else state.selected.add(message.id);
+        renderConversation();
+      });
+    } else if (!streaming && message.id) {
+      // 右键单条收藏，和微信的长按菜单对应。
+      row.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        favoriteMessages([message]);
+      });
+    }
     return row;
   };
   if (!messages.length && !state.streamingText) {
@@ -590,10 +729,32 @@ function renderConversationMessages() {
       : '<div><strong>还没有联系人</strong>点击左侧「新建」创建一个联系人后开始聊天。</div>';
     stream.append(empty);
   } else {
-    messages.forEach(message => stream.append(rowFor(message.role, message.content)));
-    if (state.streamingText) stream.append(rowFor('assistant', state.streamingText));
+    messages.forEach(message => stream.append(rowFor(message)));
+    if (state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
   }
   stream.scrollTop = stream.scrollHeight;
+}
+
+async function favoriteMessages(messages) {
+  const list = (messages || []).filter(Boolean);
+  if (!list.length) {
+    showError('请先选择要收藏的内容');
+    return;
+  }
+  try {
+    await window.desktop.favorites.add({
+      source: 'chat',
+      conversationId: state.currentConversation?.id || '',
+      title: state.currentConversation?.title || '',
+      messages: list,
+    });
+    state.selectMode = false;
+    state.selected.clear();
+    renderConversation();
+    showMessage(list.length > 1 ? `已收藏 ${list.length} 条` : '已收藏');
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 function renderConversation() {
@@ -712,23 +873,125 @@ function renderConversation() {
   const tools = document.createElement('div');
   tools.className = 'conversation-tools';
   if (state.currentConversation) {
-    const edit = button('联系人设置', 'button button-quiet button-small');
-    edit.addEventListener('click', () => openConversationEditor(state.currentConversation));
-    const clearCurrent = button('清空记录', 'button button-quiet button-small');
-    clearCurrent.disabled = !(state.currentConversation.messages || []).length;
-    clearCurrent.addEventListener('click', () => openClearConfirm(state.currentConversation));
-    tools.append(edit, clearCurrent);
+    if (state.selectMode) {
+      const count = state.selected.size;
+      const favorite = button(count ? `收藏 ${count} 条` : '收藏所选', 'button button-small');
+      favorite.disabled = !count;
+      favorite.addEventListener('click', () => {
+        const picked = (state.currentConversation.messages || []).filter(item => state.selected.has(item.id));
+        favoriteMessages(picked);
+      });
+      const cancel = button('取消', 'button button-quiet button-small');
+      cancel.addEventListener('click', () => {
+        state.selectMode = false;
+        state.selected.clear();
+        renderConversation();
+      });
+      tools.append(favorite, cancel);
+    } else {
+      const pick = button('多选收藏', 'button button-quiet button-small');
+      pick.disabled = !(state.currentConversation.messages || []).length;
+      pick.addEventListener('click', () => {
+        state.selectMode = true;
+        state.selected.clear();
+        renderConversation();
+      });
+      const edit = button('联系人设置', 'button button-quiet button-small');
+      edit.addEventListener('click', () => openConversationEditor(state.currentConversation));
+      const clearCurrent = button('清空记录', 'button button-quiet button-small');
+      clearCurrent.disabled = !(state.currentConversation.messages || []).length;
+      clearCurrent.addEventListener('click', () => openClearConfirm(state.currentConversation));
+      tools.append(pick, edit, clearCurrent);
+    }
   }
   toolbar.append(identity, tools);
   main.append(toolbar);
   const stream = document.createElement('div');
   stream.id = 'message-stream';
   stream.className = 'message-stream';
+  // 自定义聊天背景。
+  if (state.chatBackground) {
+    if (state.chatBackground.startsWith('data:image/')) {
+      stream.style.backgroundImage = `url("${state.chatBackground}")`;
+      stream.style.backgroundSize = 'cover';
+      stream.style.backgroundPosition = 'center';
+    } else {
+      stream.style.background = state.chatBackground;
+    }
+  }
   main.append(stream);
   const form = document.createElement('form');
   form.className = 'message-form';
+  const disabled = state.agentBusy || onboardingNeeded() || !state.currentConversation;
+
+  // 左侧工具：语音、图片/视频、文件，以及 AI 语音回复开关。
+  const actionsBar = document.createElement('div');
+  actionsBar.className = 'compose-actions';
+  const micButton = button('', `compose-icon${state.recording ? ' recording' : ''}`);
+  micButton.title = state.recording ? '松开结束，点击发送语音' : '按住或点击录语音';
+  micButton.disabled = disabled;
+  micButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+  micButton.addEventListener('click', () => toggleRecording());
+  const mediaInput = document.createElement('input');
+  mediaInput.type = 'file';
+  mediaInput.accept = 'image/*,video/*';
+  mediaInput.hidden = true;
+  mediaInput.addEventListener('change', () => {
+    const file = mediaInput.files?.[0];
+    mediaInput.value = '';
+    if (file) sendAttachment(file);
+  });
+  const mediaButton = button('', 'compose-icon');
+  mediaButton.title = '发送图片或视频';
+  mediaButton.disabled = disabled;
+  mediaButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 17 5-5 4 4 2-2 3 3"/></svg>';
+  mediaButton.addEventListener('click', () => mediaInput.click());
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.hidden = true;
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file) sendAttachment(file);
+  });
+  const fileButton = button('', 'compose-icon');
+  fileButton.title = '发送文件';
+  fileButton.disabled = disabled;
+  fileButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3v5h5"/><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/></svg>';
+  fileButton.addEventListener('click', () => fileInput.click());
+  const voiceToggle = document.createElement('label');
+  voiceToggle.className = `compose-voice-toggle${state.aiVoiceReply ? ' on' : ''}`;
+  voiceToggle.title = 'AI 用语音回复';
+  const voiceCheck = document.createElement('input');
+  voiceCheck.type = 'checkbox';
+  voiceCheck.checked = state.aiVoiceReply;
+  voiceCheck.addEventListener('change', async () => {
+    try {
+      await window.desktop.app.settings.save({ aiVoiceReply: voiceCheck.checked });
+      state.aiVoiceReply = voiceCheck.checked;
+      voiceToggle.classList.toggle('on', state.aiVoiceReply);
+      showMessage(state.aiVoiceReply ? 'AI 将用语音回复' : 'AI 将用文字回复');
+    } catch (error) {
+      voiceCheck.checked = !voiceCheck.checked;
+      showError(error.message);
+    }
+  });
+  const voiceLabel = document.createElement('span');
+  voiceLabel.textContent = 'AI 语音';
+  voiceToggle.append(voiceCheck, voiceLabel);
+  actionsBar.append(micButton, mediaButton, fileButton, mediaInput, fileInput, voiceToggle);
+  if (state.recording) {
+    const tip = document.createElement('span');
+    tip.className = 'recording-tip';
+    tip.textContent = '正在录音，再点一次麦克风结束并发送';
+    actionsBar.append(tip);
+  }
+
+  const inputRow = document.createElement('div');
+  inputRow.className = 'compose-row';
   const input = document.createElement('textarea');
-  input.disabled = state.agentBusy || onboardingNeeded() || !state.currentConversation;
+  input.disabled = disabled;
+  input.placeholder = state.currentConversation ? '说点什么，Enter 发送，Shift+Enter 换行' : '先在左侧选一个联系人';
   input.value = state.draft || '';
   input.addEventListener('input', () => { state.draft = input.value; });
   input.addEventListener('keydown', event => {
@@ -739,8 +1002,9 @@ function renderConversation() {
   });
   const send = button('发送', 'button');
   send.type = 'submit';
-  send.disabled = input.disabled;
-  form.append(input, send);
+  send.disabled = disabled;
+  inputRow.append(input, send);
+  form.append(actionsBar, inputRow);
   form.addEventListener('submit', event => {
     event.preventDefault();
     const value = input.value;
@@ -1084,9 +1348,101 @@ function openDeleteConfirm(item) {
   document.body.append(backdrop);
 }
 
-async function startAgentChat(text) {
+// 读文件为 data URL，交给主进程落盘保存。
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result)));
+    reader.addEventListener('error', () => reject(new Error('读取文件失败')));
+    reader.readAsDataURL(file);
+  });
+}
+
+function attachmentKindOf(file) {
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/')) return 'video';
+  return 'file';
+}
+
+async function sendAttachment(file) {
+  if (!state.currentConversation) {
+    showError('请先选择一个联系人');
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    showError('文件超过 20MB，发不出去');
+    return;
+  }
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    await sendMessage('', {
+      kind: attachmentKindOf(file),
+      content: '',
+      attachment: { name: file.name, mime: file.type || 'application/octet-stream', size: file.size, dataUrl },
+    });
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+// 录语音：录完先转写成文字，再作为语音消息发出去。
+async function toggleRecording() {
+  if (state.recording) {
+    const recorder = state.recording;
+    state.recording = null;
+    recorder.stop();
+    return;
+  }
+  if (!state.currentConversation) {
+    showError('请先选择一个联系人');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    const startedAt = Date.now();
+    recorder.addEventListener('dataavailable', event => {
+      if (event.data?.size) chunks.push(event.data);
+    });
+    recorder.addEventListener('stop', async () => {
+      stream.getTracks().forEach(track => track.stop());
+      state.recording = null;
+      renderConversation();
+      if (!chunks.length) return;
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      const durationMs = Date.now() - startedAt;
+      try {
+        const dataUrl = await readFileAsDataUrl(blob);
+        let text = '';
+        // 转写失败不拦截发送，语音条照样留在记录里。
+        try {
+          const result = await window.desktop.agent.transcribe(dataUrl);
+          text = result?.text || '';
+        } catch (error) {
+          showError(`语音转文字失败：${error.message}`);
+        }
+        await sendMessage(text, {
+          kind: 'voice',
+          content: text,
+          attachment: { name: '语音', mime: blob.type || 'audio/webm', size: blob.size, durationMs, dataUrl },
+        });
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    recorder.start();
+    state.recording = recorder;
+    renderConversation();
+  } catch (_) {
+    showError('打不开麦克风，请检查系统录音权限');
+  }
+}
+
+async function sendMessage(text, message = null) {
   const value = String(text || '').trim();
-  if (!value || state.agentBusy) return;
+  if (!value && !message) return;
+  if (state.agentBusy) return;
   try {
     if (!state.currentConversation) {
       const created = await window.desktop.agent.conversationNew('新对话');
@@ -1094,22 +1450,21 @@ async function startAgentChat(text) {
       await selectConversation(created.id);
     }
     const conversationId = state.currentConversation.id;
-    // 复制一份再追加，不要就地改动已加载的会话对象。
     state.currentConversation = {
       ...state.currentConversation,
-      messages: [...(state.currentConversation.messages || []), { role: 'user', content: value }],
+      messages: [
+        ...(state.currentConversation.messages || []),
+        message ? { ...message, role: 'user', id: `pending-${Date.now()}` } : { role: 'user', kind: 'text', content: value, id: `pending-${Date.now()}` },
+      ],
     };
     state.agentBusy = true;
     state.streamingText = '';
     renderConversation();
-    const result = await window.desktop.agent.chatStart(conversationId, value);
+    const result = await window.desktop.agent.chatStart(conversationId, value, message || undefined);
     state.agentTicketId = result.ticketId;
-    // 用户那一句已落盘，这里以文件为准刷新，顺带更新侧边栏预览。
     try {
       const saved = await window.desktop.agent.conversationLoad(conversationId);
-      if (state.currentConversation?.id === conversationId) {
-        state.currentConversation = saved;
-      }
+      if (state.currentConversation?.id === conversationId) state.currentConversation = saved;
       await reloadConversations();
       if (location.hash.startsWith('#/conversation')) renderConversation();
     } catch (_) {
@@ -1120,6 +1475,11 @@ async function startAgentChat(text) {
     showError(error.message);
     renderConversation();
   }
+}
+
+// 纯文字发送仍沿用这个入口，内部统一走 sendMessage。
+async function startAgentChat(text) {
+  return sendMessage(text);
 }
 
 async function handleAgentEvent(event) {
@@ -1177,13 +1537,15 @@ function renderProviders() {
   const heading = document.createElement('div');
   heading.className = 'page-heading';
   heading.innerHTML = '<div><h1>供应商</h1><p>管理模型、转文字和声音服务。密钥只保存在你的电脑上。</p></div>';
+  const backToSettings = button('返回设置', 'button button-quiet');
+  backToSettings.addEventListener('click', () => { location.hash = '#/settings'; });
   const add = button('添加供应商', 'button');
   add.addEventListener('click', () => openProviderForm());
   const quickConnect = button('快速连接', 'button button-quiet');
   quickConnect.addEventListener('click', openQuickConnectForm);
   const headingActions = document.createElement('div');
   headingActions.className = 'page-heading-actions';
-  headingActions.append(add, quickConnect);
+  headingActions.append(backToSettings, add, quickConnect);
   heading.append(headingActions);
   content.append(heading);
   if (!state.onboardingDismissed && onboardingNeeded()) {
@@ -1216,35 +1578,124 @@ function renderProviders() {
   });
 }
 
+function callServiceBlocked(shell) {
+  if (state.service.status === 'ready' && state.meta?.port) return false;
+  const empty = document.createElement('div');
+  empty.className = 'settings-card call-empty';
+  const inner = document.createElement('div');
+  const title = document.createElement('h2');
+  title.textContent = state.service.status === 'failed' ? '服务没有启动' : '服务正在启动';
+  const message = document.createElement('p');
+  message.textContent = state.service.message || '请稍候…';
+  inner.append(title, message);
+  const restart = button('重新启动服务', 'button');
+  restart.addEventListener('click', async () => {
+    restart.disabled = true;
+    try { await window.desktop.app.restartService(); } catch (error) { showError(error.message); }
+    finally { restart.disabled = false; }
+  });
+  inner.append(restart);
+  empty.append(inner);
+  shell.append(empty);
+  content.append(shell);
+  return true;
+}
+
+function callTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const time = `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (sameDay) return time;
+  return `${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
+// 通话页按 iOS 电话的做法分成最近通话、联系人、拨号键盘三个标签。
 function renderCall() {
   content.replaceChildren();
   const shell = document.createElement('div');
   shell.className = 'call-shell';
-  const heading = document.createElement('div');
-  heading.className = 'page-heading';
-  heading.innerHTML = '<div><h1>通话</h1><p>选一个联系人，用打电话的方式聊一会儿。</p></div>';
-  shell.append(heading);
-  if (state.service.status !== 'ready' || !state.meta?.port) {
-    const empty = document.createElement('div');
-    empty.className = 'settings-card call-empty';
-    const inner = document.createElement('div');
-    const title = document.createElement('h2');
-    title.textContent = state.service.status === 'failed' ? '服务没有启动' : '服务正在启动';
-    const message = document.createElement('p');
-    message.textContent = state.service.message || '请稍候…';
-    inner.append(title, message);
-    const restart = button('重新启动服务', 'button');
-    restart.addEventListener('click', async () => {
-      restart.disabled = true;
-      try { await window.desktop.app.restartService(); } catch (error) { showError(error.message); }
-      finally { restart.disabled = false; }
+  if (callServiceBlocked(shell)) return;
+
+  const tabs = document.createElement('div');
+  tabs.className = 'call-tabs';
+  [['recents', '通话记录'], ['contacts', '联系人'], ['keypad', '拨号键盘']].forEach(([id, label]) => {
+    const tab = button(label, `call-tab${state.callTab === id ? ' active' : ''}`);
+    tab.addEventListener('click', () => {
+      state.callTab = id;
+      renderCall();
     });
-    inner.append(restart);
-    empty.append(inner);
-    shell.append(empty);
-    content.append(shell);
+    tabs.append(tab);
+  });
+  shell.append(tabs);
+
+  const body = document.createElement('div');
+  body.className = 'call-body';
+  if (state.callTab === 'recents') renderCallRecents(body, shell);
+  else if (state.callTab === 'keypad') renderCallKeypad(body, shell);
+  else renderCallContacts(body, shell);
+  shell.append(body);
+  content.append(shell);
+}
+
+function renderCallRecents(body, shell) {
+  const head = document.createElement('div');
+  head.className = 'call-list-head';
+  const title = document.createElement('strong');
+  title.textContent = '最近通话';
+  head.append(title);
+  if (state.callLog.length) {
+    const clear = button('清空', 'button button-quiet button-small');
+    clear.addEventListener('click', async () => {
+      try {
+        await window.desktop.calls.clear();
+        state.callLog = await window.desktop.calls.list();
+        renderCall();
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    head.append(clear);
+  }
+  body.append(head);
+  if (!state.callLog.length) {
+    const empty = document.createElement('div');
+    empty.className = 'conversation-empty';
+    empty.textContent = '还没有通话记录。去「联系人」里拨一个吧。';
+    body.append(empty);
     return;
   }
+  const list = document.createElement('div');
+  list.className = 'call-log-list';
+  state.callLog.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'call-log-row';
+    row.append(avatarNode(item.avatar || state.avatars.ai, 'call-avatar-small'));
+    const text = document.createElement('div');
+    text.className = 'call-log-text';
+    const name = document.createElement('strong');
+    name.textContent = item.title || '未知联系人';
+    if (item.missed) name.classList.add('missed');
+    const meta = document.createElement('span');
+    const parts = [item.direction === 'incoming' ? '来电' : '去电'];
+    if (item.durationMs) parts.push(formatDuration(item.durationMs));
+    parts.push(callTimeLabel(item.startedAt));
+    meta.textContent = parts.join(' · ');
+    text.append(name, meta);
+    const dial = iconButton('再次呼叫', '<path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z"/>', 'call-dial');
+    dial.addEventListener('click', () => {
+      const target = state.conversations.find(row2 => row2.id === item.conversationId);
+      if (target) openCallView(shell, target);
+      else showError('这个联系人已经删除了');
+    });
+    row.append(text, dial);
+    list.append(row);
+  });
+  body.append(list);
+}
+
+function renderCallContacts(body, shell) {
   if (!state.conversations.length) {
     const empty = document.createElement('div');
     empty.className = 'settings-card call-empty';
@@ -1252,17 +1703,14 @@ function renderCall() {
     const title = document.createElement('h2');
     title.textContent = '还没有联系人';
     const message = document.createElement('p');
-    message.textContent = '先在「对话」里新建一个联系人，设置头像和号码后会出现在这里。';
+    message.textContent = '先在「聊天」里新建一个联系人，设置头像和号码后会出现在这里。';
     const go = button('去新建联系人', 'button');
     go.addEventListener('click', () => { location.hash = '#/conversation'; });
     inner.append(title, message, go);
     empty.append(inner);
-    shell.append(empty);
-    content.append(shell);
+    body.append(empty);
     return;
   }
-  const dialer = document.createElement('div');
-  dialer.className = 'dialer';
   const contacts = document.createElement('div');
   contacts.className = 'call-contacts';
   state.conversations.forEach(item => {
@@ -1281,9 +1729,56 @@ function renderCall() {
     contact.addEventListener('click', () => openCallView(shell, item));
     contacts.append(contact);
   });
-  dialer.append(contacts);
-  shell.append(dialer);
-  content.append(shell);
+  body.append(contacts);
+}
+
+// iOS 拨号盘：3×4 键位，底部一个绿色拨号键。
+function renderCallKeypad(body, shell) {
+  const pad = document.createElement('div');
+  pad.className = 'keypad';
+  const display = document.createElement('div');
+  display.className = 'keypad-display';
+  display.textContent = state.dialNumber ? formatNumber(state.dialNumber) : '';
+  pad.append(display);
+  const matched = state.conversations.find(item => (item.number || conversationSettings(item).number) === state.dialNumber);
+  const hint = document.createElement('div');
+  hint.className = 'keypad-hint';
+  hint.textContent = state.dialNumber ? (matched ? matched.title : '没有匹配的联系人') : '输入号码呼叫联系人';
+  pad.append(hint);
+  const grid = document.createElement('div');
+  grid.className = 'keypad-grid';
+  [['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
+    ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'], ['*', ''], ['0', '+'], ['#', '']].forEach(([digit, letters]) => {
+    const key = button('', 'keypad-key');
+    key.innerHTML = `<strong>${digit}</strong>${letters ? `<span>${letters}</span>` : ''}`;
+    key.addEventListener('click', () => {
+      if (!/\d/.test(digit)) return;
+      state.dialNumber = `${state.dialNumber}${digit}`.slice(0, 12);
+      renderCall();
+    });
+    grid.append(key);
+  });
+  pad.append(grid);
+  const actions = document.createElement('div');
+  actions.className = 'keypad-actions';
+  const dial = button('', 'keypad-dial');
+  dial.title = '呼叫';
+  dial.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z"/></svg>';
+  dial.disabled = !matched;
+  dial.addEventListener('click', () => {
+    if (matched) openCallView(shell, matched);
+  });
+  const back = button('', 'keypad-back');
+  back.title = '删除';
+  back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 6h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9L4 12z"/><path d="m13 10 4 4m0-4-4 4"/></svg>';
+  back.disabled = !state.dialNumber;
+  back.addEventListener('click', () => {
+    state.dialNumber = state.dialNumber.slice(0, -1);
+    renderCall();
+  });
+  actions.append(document.createElement('span'), dial, back);
+  pad.append(actions);
+  body.append(pad);
 }
 
 function openCallView(shell, item) {
@@ -1303,7 +1798,9 @@ function openCallView(shell, item) {
     persona: settings.persona || '',
     tone: settings.tone || '',
     wave: state.chat.waveform !== false,
+    background: state.callBackground || '',
   };
+  const startedAt = Date.now();
   shell.replaceChildren();
   const bar = document.createElement('div');
   bar.className = 'call-stage-bar';
@@ -1320,17 +1817,254 @@ function openCallView(shell, item) {
   view.setAttribute('partition', 'persist:earshot-call');
   view.src = `http://127.0.0.1:${state.meta.port}/`;
   const inject = () => {
-    // 把联系人信息交给通话页：名字、号码、头像、模型、说话风格、波形开关。
+    // 把联系人信息交给通话页：名字、号码、头像、模型、说话风格、波形与背景。
     const literal = JSON.stringify(payload).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
     view.executeJavaScript(`window.dispatchEvent(new CustomEvent('earshot:contact', { detail: ${literal} }))`).catch(() => {});
   };
   view.addEventListener('dom-ready', inject);
   view.addEventListener('did-finish-load', inject);
-  back.addEventListener('click', () => {
+  back.addEventListener('click', async () => {
     view.executeJavaScript('window.earshotHangup && window.earshotHangup()').catch(() => {});
+    // 挂断后写一条通话记录。
+    try {
+      await window.desktop.calls.add({
+        conversationId: conversation.id,
+        title: payload.name,
+        number: payload.number,
+        avatar: settings.avatar || '',
+        direction: 'outgoing',
+        durationMs: Date.now() - startedAt,
+        startedAt: new Date(startedAt).toISOString(),
+      });
+      state.callLog = await window.desktop.calls.list();
+    } catch (_) {
+      // 记录失败不影响挂断。
+    }
+    state.callTab = 'recents';
     setTimeout(() => { renderCall(); }, 120);
   });
   shell.append(bar, view);
+}
+
+// 收藏页：聊天里收的一句话、一段语音，或一次收的几条。
+function renderFavorites() {
+  content.replaceChildren();
+  const heading = document.createElement('div');
+  heading.className = 'page-heading';
+  heading.innerHTML = '<div><h1>收藏</h1><p>聊天里右键一条消息，或用「多选收藏」一次收几条。</p></div>';
+  if (state.favorites.length) {
+    const clear = button('清空收藏', 'button button-danger');
+    clear.addEventListener('click', async () => {
+      try {
+        await window.desktop.favorites.clear();
+        state.favorites = await window.desktop.favorites.list();
+        renderFavorites();
+        showMessage('收藏已清空');
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    const actions = document.createElement('div');
+    actions.className = 'page-heading-actions';
+    actions.append(clear);
+    heading.append(actions);
+  }
+  content.append(heading);
+
+  const groups = [
+    ['chat', '来自聊天'],
+    ['call', '来自通话'],
+  ];
+  if (!state.favorites.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.textContent = '还没有收藏。在聊天里右键一条消息就能收进来。';
+    content.append(empty);
+    return;
+  }
+  groups.forEach(([source, title]) => {
+    const items = state.favorites.filter(item => (item.source || 'chat') === source);
+    const group = document.createElement('section');
+    group.className = 'provider-group';
+    const groupHeading = document.createElement('div');
+    groupHeading.className = 'group-heading';
+    groupHeading.innerHTML = `<h2>${title}</h2><span>${items.length} 条</span>`;
+    group.append(groupHeading);
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'conversation-empty';
+      empty.textContent = source === 'call' ? '通话里还没有收藏内容。' : '聊天里还没有收藏内容。';
+      group.append(empty);
+    }
+    items.forEach(item => {
+      const card = document.createElement('article');
+      card.className = 'favorite-card';
+      const head = document.createElement('div');
+      head.className = 'favorite-head';
+      const title2 = document.createElement('strong');
+      title2.textContent = item.title || '未命名联系人';
+      const time = document.createElement('span');
+      time.textContent = callTimeLabel(item.createdAt);
+      const remove = button('删除', 'button button-quiet button-small');
+      remove.addEventListener('click', async () => {
+        try {
+          await window.desktop.favorites.remove(item.id);
+          state.favorites = await window.desktop.favorites.list();
+          renderFavorites();
+        } catch (error) {
+          showError(error.message);
+        }
+      });
+      head.append(title2, time, remove);
+      card.append(head);
+      const list = document.createElement('div');
+      list.className = 'favorite-messages';
+      (item.messages || []).forEach(message => {
+        const line = document.createElement('div');
+        line.className = `favorite-line ${message.role === 'user' ? 'user' : 'assistant'}`;
+        const who = document.createElement('span');
+        who.className = 'favorite-who';
+        who.textContent = message.role === 'user' ? '我' : '对方';
+        line.append(who);
+        if (!message.kind || message.kind === 'text') {
+          const text = document.createElement('div');
+          text.className = 'favorite-text';
+          text.textContent = message.content;
+          line.append(text);
+        } else {
+          line.append(attachmentBubble(message));
+        }
+        list.append(line);
+      });
+      card.append(list);
+      group.append(card);
+    });
+    content.append(group);
+  });
+}
+
+// 背景选择：纯色预设 + 自定义图片，通话背景默认纯黑。
+function backgroundPicker(label, current, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'background-field';
+  const title = document.createElement('span');
+  title.className = 'background-title';
+  title.textContent = label;
+  const row = document.createElement('div');
+  row.className = 'background-row';
+  const preview = document.createElement('span');
+  preview.className = 'background-preview';
+  const paint = value => {
+    if (value && value.startsWith('data:image/')) {
+      preview.style.backgroundImage = `url("${value}")`;
+      preview.style.background = '';
+      preview.style.backgroundSize = 'cover';
+      preview.style.backgroundPosition = 'center';
+      preview.textContent = '';
+    } else {
+      preview.style.backgroundImage = '';
+      preview.style.background = value || 'var(--bg)';
+      preview.textContent = value ? '' : '默认';
+    }
+  };
+  paint(current);
+  const apply = async value => {
+    try {
+      await onChange(value);
+      paint(value);
+      showMessage('背景已保存');
+      renderRoute();
+    } catch (error) {
+      showError(error.message);
+    }
+  };
+  const swatches = document.createElement('div');
+  swatches.className = 'background-swatches';
+  [['', '默认'], ['#000000', '纯黑'], ['#101418', '深灰'], ['#1B2430', '夜蓝'], ['#F3EFE7', '米白']].forEach(([value, name]) => {
+    const swatch = button('', 'background-swatch');
+    swatch.title = name;
+    if (value) swatch.style.background = value;
+    else swatch.textContent = '默认';
+    swatch.addEventListener('click', () => apply(value));
+    swatches.append(swatch);
+  });
+  const file = document.createElement('input');
+  file.type = 'file';
+  file.accept = 'image/*';
+  file.hidden = true;
+  file.addEventListener('change', async () => {
+    const image = file.files?.[0];
+    file.value = '';
+    if (!image) return;
+    if (image.size > 4 * 1024 * 1024) {
+      showError('背景图片超过 4MB，请先压缩');
+      return;
+    }
+    try {
+      apply(await readFileAsDataUrl(image));
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  const upload = button('选图片…', 'button button-quiet button-small');
+  upload.addEventListener('click', () => file.click());
+  row.append(preview, swatches, upload, file);
+  wrap.append(title, row);
+  return wrap;
+}
+
+// 通话高级设置：原先浮在通话界面上的那些开关，挪到这里。
+function openCallSettingsDialog() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = '<h2>通话高级设置</h2><p class="settings-note">这些选项作用于通话页面，保存后重新发起通话生效。</p>';
+  const store = (key, fallback) => {
+    try { return localStorage.getItem(key) ?? fallback; } catch (_) { return fallback; }
+  };
+  const tokenField = document.createElement('label');
+  tokenField.className = 'editor-field';
+  tokenField.innerHTML = '<span>访问令牌</span>';
+  const token = document.createElement('input');
+  token.type = 'password';
+  token.placeholder = '仅当服务设置了 ACCESS_TOKEN 时填写';
+  token.value = store('earshot:token', '');
+  tokenField.append(token);
+  const dictationRow = document.createElement('label');
+  dictationRow.className = 'pref-row';
+  const dictation = document.createElement('input');
+  dictation.type = 'checkbox';
+  dictation.checked = store('earshot:dictation', '') === '1';
+  dictationRow.innerHTML = '<div><strong>使用浏览器自带听写</strong><p>Chrome / Edge 免费，中国大陆可能不可用</p></div>';
+  dictationRow.append(dictation);
+  const bargeRow = document.createElement('label');
+  bargeRow.className = 'pref-row';
+  const barge = document.createElement('input');
+  barge.type = 'checkbox';
+  barge.checked = store('earshot:barge', '') === '1';
+  bargeRow.innerHTML = '<div><strong>说话时直接打断</strong><p>戴耳机效果最好；点波形线也可以打断</p></div>';
+  bargeRow.append(barge);
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = button('取消', 'button button-quiet');
+  cancel.addEventListener('click', () => backdrop.remove());
+  const save = button('保存', 'button');
+  save.addEventListener('click', () => {
+    try {
+      localStorage.setItem('earshot:token', token.value.trim());
+      localStorage.setItem('earshot:dictation', dictation.checked ? '1' : '');
+      localStorage.setItem('earshot:barge', barge.checked ? '1' : '');
+      backdrop.remove();
+      showMessage('通话设置已保存');
+    } catch (_) {
+      showError('保存失败，浏览器存储不可用');
+    }
+  });
+  actions.append(cancel, save);
+  modal.append(tokenField, dictationRow, bargeRow, actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
 }
 
 async function renderSettings() {
@@ -1481,9 +2215,61 @@ async function renderSettings() {
       await window.desktop.app.settings.save({ waveform: checked });
       state.chat.waveform = checked;
     }),
+    prefRow('AI 用语音回复', '开启后 AI 的回答会合成语音，聊天里以语音条显示', state.aiVoiceReply, async checked => {
+      await window.desktop.app.settings.save({ aiVoiceReply: checked });
+      state.aiVoiceReply = checked;
+    }),
   );
   callCard.append(callPrefs);
+  // 通话里的访问令牌、听写与打断设置都收在这里，通话界面不再出现设置入口。
+  const callNote = document.createElement('p');
+  callNote.className = 'settings-note';
+  callNote.textContent = '通话中的听写、打断与访问令牌设置已经收进这里，通话界面只保留通话本身。';
+  const callAdvanced = document.createElement('div');
+  callAdvanced.className = 'settings-actions';
+  const openCallSettings = button('通话高级设置…', 'button button-quiet');
+  openCallSettings.addEventListener('click', () => openCallSettingsDialog());
+  callAdvanced.append(openCallSettings);
+  callCard.append(callNote, callAdvanced);
   content.append(callCard);
+
+  // 聊天背景与通话背景。
+  const backgroundCard = document.createElement('section');
+  backgroundCard.className = 'settings-card settings-section';
+  backgroundCard.innerHTML = '<h2>背景</h2>';
+  const backgroundNote = document.createElement('p');
+  backgroundNote.className = 'settings-note';
+  backgroundNote.textContent = '可以给聊天和通话各挑一张背景图，通话背景默认是纯黑。';
+  backgroundCard.append(backgroundNote);
+  backgroundCard.append(
+    backgroundPicker('聊天背景', state.chatBackground, value => {
+      state.chatBackground = value;
+      return window.desktop.app.settings.save({ chatBackground: value });
+    }),
+    backgroundPicker('通话背景', state.callBackground, value => {
+      state.callBackground = value;
+      return window.desktop.app.settings.save({ callBackground: value });
+    }),
+  );
+  content.append(backgroundCard);
+
+  // 供应商并入设置，这里只留一个入口。
+  const providerCardEntry = document.createElement('section');
+  providerCardEntry.className = 'settings-card settings-section';
+  providerCardEntry.innerHTML = '<h2>供应商</h2>';
+  const providerNote = document.createElement('p');
+  providerNote.className = 'settings-note';
+  const missing = missingProfileProviders().length;
+  providerNote.textContent = missing
+    ? `还有 ${missing} 个供应商没有填写 Key，填好才能开始聊天。`
+    : '模型、转文字和声音服务都已配置好。';
+  const providerActions = document.createElement('div');
+  providerActions.className = 'settings-actions';
+  const openProviders = button('管理供应商…', 'button');
+  openProviders.addEventListener('click', () => { location.hash = '#/providers'; });
+  providerActions.append(openProviders);
+  providerCardEntry.append(providerNote, providerActions);
+  content.append(providerCardEntry);
 
   const contactCard = document.createElement('section');
   contactCard.className = 'settings-card settings-section';
@@ -1559,6 +2345,8 @@ async function renderSettings() {
   storageActions.className = 'settings-actions';
   const config = button('打开配置目录', 'button button-quiet');
   config.addEventListener('click', () => window.desktop.app.openPath('config'));
+  const logs = button('打开日志目录', 'button button-quiet');
+  logs.addEventListener('click', () => window.desktop.app.openPath('logs'));
   const restart = button('重启服务', 'button');
   restart.title = '重启服务会中断当前通话';
   restart.addEventListener('click', async () => {
@@ -1567,7 +2355,7 @@ async function renderSettings() {
     try { await window.desktop.app.restartService(); } catch (error) { showError(error.message); }
     finally { restart.disabled = false; }
   });
-  storageActions.append(config, restart);
+  storageActions.append(config, logs, restart);
   storageCard.append(storageActions, info('安装目录由安装程序选择；修改供应商或路径后，请重启服务使设置生效。'));
   content.append(storageCard);
 
@@ -1840,18 +2628,20 @@ async function refresh() {
 
 function renderRoute() {
   const route = location.hash || '#/conversation';
-  const pathName = route.split('?')[0].replace(/^#/, '') || '/providers';
-  setActiveNav(pathName);
+  const pathName = route.split('?')[0].replace(/^#/, '') || '/conversation';
+  // 供应商已并入设置，侧边只保留聊天 / 通话 / 收藏 / 设置。
+  setActiveNav(pathName === '/providers' ? '/settings' : pathName);
   if (pathName === '/conversation') renderConversation();
   else if (pathName === '/call') renderCall();
-  else if (pathName === '/settings') renderSettings();
-  else renderProviders();
+  else if (pathName === '/favorites') renderFavorites();
+  else if (pathName === '/providers') renderProviders();
+  else renderSettings();
 }
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
 document.documentElement.dataset.theme = 'mono-light';
 
-$('#open-logs').addEventListener('click', () => window.desktop.app.openPath('logs'));
+$('#open-logs')?.addEventListener('click', () => window.desktop.app.openPath('logs'));
 window.addEventListener('hashchange', renderRoute);
 window.desktop.agent.onEvent(handleAgentEvent);
 window.desktop.onState(async service => {
@@ -1874,9 +2664,24 @@ async function bootstrapUi() {
     state.chat = {
       waveform: settings?.waveform !== false,
     };
+    state.aiVoiceReply = settings?.aiVoiceReply === true;
+    state.chatBackground = settings?.chatBackground || '';
+    state.callBackground = settings?.callBackground || '';
     if (settings?.toneId) state.activeToneId = settings.toneId;
   } catch (_) {
     // 设置读不到时用默认值继续渲染。
+  }
+  // 收藏和通话记录读不到也不拦截启动。
+  try {
+    const [favorites, callLog] = await Promise.all([
+      window.desktop.favorites.list(),
+      window.desktop.calls.list(),
+    ]);
+    state.favorites = favorites || [];
+    state.callLog = callLog || [];
+  } catch (_) {
+    state.favorites = [];
+    state.callLog = [];
   }
   await refresh();
   await loadAgentState();

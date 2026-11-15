@@ -29,8 +29,11 @@ const {
 } = require('./providers.cjs');
 const { testProvider } = require('./provider-test.cjs');
 const {
+  CallLogStore,
   ConversationStore,
+  FavoriteStore,
   buildSystemPrompt,
+  messageSummary,
   readTones,
   recallMemories,
   storeMemory,
@@ -78,6 +81,8 @@ let state = {
 let config;
 let logFile;
 let conversationStore;
+let favoriteStore;
+let callLogStore;
 let toneOptions = [];
 const agentTickets = new Map();
 
@@ -137,6 +142,72 @@ function activeLlmProvider(preferredId = '') {
   };
 }
 
+// 按 Profile 取出某一类供应商（stt / tts），用于语音转写和朗读。
+function activeProviderOfKind(kind) {
+  const profile = config.profiles.find(item => item.id === config.activeProfileId);
+  const id = kind === 'stt' ? profile?.sttId : profile?.ttsId;
+  const provider = config.providers.find(item => item.id === id && item.kind === kind);
+  if (!provider) throw new Error(kind === 'stt' ? '当前套餐没有配置语音转文字服务' : '当前套餐没有配置语音合成服务');
+  const apiKey = getProviderKey(config, provider.id, safeStorage);
+  if (!provider.baseUrl) throw new Error(`${provider.name} 还没有填写 Base URL`);
+  if (!apiKey) throw new Error(`${provider.name} 还没有填写 API Key`);
+  return { ...provider, apiKey };
+}
+
+function dataUrlToBuffer(dataUrl) {
+  const match = /^data:([\w.+-]+\/[\w.+-]+)(?:;[^,]*)?;base64,(.*)$/.exec(String(dataUrl || ''));
+  if (!match) throw new Error('音频数据无效');
+  return { mime: match[1], buffer: Buffer.from(match[2], 'base64') };
+}
+
+// 把一段录音转成文字，走 OpenAI 兼容的 /audio/transcriptions。
+async function transcribeAudio(dataUrl) {
+  const provider = activeProviderOfKind('stt');
+  const { mime, buffer } = dataUrlToBuffer(dataUrl);
+  const ext = /mp4|m4a|aac/.test(mime) ? 'm4a' : /ogg/.test(mime) ? 'ogg' : /wav/.test(mime) ? 'wav' : /mpeg|mp3/.test(mime) ? 'mp3' : 'webm';
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mime }), `speech.${ext}`);
+  form.append('model', provider.model);
+  const response = await fetch(`${String(provider.baseUrl).replace(/\/+$/, '')}/audio/transcriptions`, {
+    method: 'POST',
+    body: form,
+    headers: { ...(provider.extraHeaders || {}), Authorization: `Bearer ${provider.apiKey}` },
+    signal: AbortSignal.timeout(Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) * 3 : 30_000),
+  });
+  if (!response.ok) throw new Error(`语音转文字失败（HTTP ${response.status}）`);
+  const payload = await response.json();
+  return { text: String(payload?.text || '').trim() };
+}
+
+// 把文字读成语音，返回 data URL 供界面直接播放。
+async function synthesizeSpeech(text) {
+  const provider = activeProviderOfKind('tts');
+  const input = String(text || '').replace(/\[[a-z][a-z ,'-]{0,40}\]/gi, '').trim();
+  if (!input) throw new Error('没有可朗读的文字');
+  const base = String(provider.baseUrl).replace(/\/+$/, '');
+  const timeout = AbortSignal.timeout(Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) * 4 : 40_000);
+  let response;
+  if (provider.protocol === 'elevenlabs') {
+    response = await fetch(`${base}/v1/text-to-speech/${encodeURIComponent(provider.voice || '')}/stream?output_format=mp3_44100_64`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg', ...(provider.extraHeaders || {}), 'xi-api-key': provider.apiKey },
+      body: JSON.stringify({ text: input, model_id: provider.model }),
+      signal: timeout,
+    });
+  } else {
+    response = await fetch(`${base}/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(provider.extraHeaders || {}), Authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify({ model: provider.model, voice: provider.voice || 'alloy', input, response_format: 'mp3' }),
+      signal: timeout,
+    });
+  }
+  if (!response.ok) throw new Error(`语音合成失败（HTTP ${response.status}）`);
+  const audio = Buffer.from(await response.arrayBuffer());
+  if (!audio.length) throw new Error('语音合成没有返回音频');
+  return { dataUrl: `data:audio/mpeg;base64,${audio.toString('base64')}`, mime: 'audio/mpeg', size: audio.length };
+}
+
 function abortConversationTickets(conversationId) {
   for (const [ticketId, ticket] of agentTickets) {
     if (ticket.conversationId !== conversationId) continue;
@@ -145,7 +216,7 @@ function abortConversationTickets(conversationId) {
   }
 }
 
-function startAgentChat(conversationId, userText) {
+function startAgentChat(conversationId, userText, userMessage = null) {
   const ticketId = `ticket-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const controller = new AbortController();
   agentTickets.set(ticketId, { controller, conversationId });
@@ -153,7 +224,9 @@ function startAgentChat(conversationId, userText) {
     let assistantText = '';
     let failed = false;
     try {
-      const conversation = conversationStore.append(conversationId, { role: 'user', content: userText });
+      const conversation = conversationStore.append(conversationId, userMessage
+        ? { ...userMessage, role: 'user' }
+        : { role: 'user', content: userText });
       agentEvent({ type: 'started', conversationId, ticketId, message: userText });
       const conversationSettings = conversation.settings || {};
       const effectiveTone = conversationSettings.tone || config.toneText || '';
@@ -178,7 +251,13 @@ function startAgentChat(conversationId, userText) {
       });
       const messages = [
         { role: 'system', content: buildSystemPrompt({ persona, tone, memories }) },
-        ...conversation.messages,
+        // 模型只吃文字：语音转写后的文字直接用，图片/文件用占位描述说明。
+        ...conversation.messages.map(item => ({
+          role: item.role,
+          content: item.kind && item.kind !== 'text' && !String(item.content || '').trim()
+            ? messageSummary(item)
+            : String(item.content || ''),
+        })).filter(item => item.content.trim()),
       ];
       const completed = await streamChat({
         provider: activeLlmProvider(conversationSettings.model),
@@ -199,7 +278,23 @@ function startAgentChat(conversationId, userText) {
         return;
       }
       if (completed && !failed && assistantText) {
-        conversationStore.append(conversationId, { role: 'assistant', content: assistantText });
+        // 开了「AI 用语音回复」就把这段话合成成语音条；合成失败则退回文字，不打断聊天。
+        let voice = null;
+        if (config.aiVoiceReply === true) {
+          try {
+            voice = await synthesizeSpeech(assistantText);
+          } catch (error) {
+            agentEvent({ type: 'notice', conversationId, ticketId, message: `语音合成失败，已改为文字：${error.message}` });
+          }
+        }
+        conversationStore.append(conversationId, voice
+          ? {
+            role: 'assistant',
+            kind: 'voice',
+            content: assistantText,
+            attachment: { name: '语音', mime: voice.mime, size: voice.size, dataUrl: voice.dataUrl },
+          }
+          : { role: 'assistant', content: assistantText });
         await storeMemory({
           memoryBaseUrl: config.memoryBaseUrl,
           memoryEnabled: config.memoryEnabled,
@@ -589,6 +684,9 @@ function registerIpc() {
     theme: config.theme || 'mono-light',
     phoneStyle: config.phoneStyle !== false,
     waveform: config.waveform !== false,
+    aiVoiceReply: config.aiVoiceReply === true,
+    chatBackground: config.chatBackground || '',
+    callBackground: config.callBackground || '',
     toneId: config.activeToneId || '',
     toneText: config.toneText || '',
   }));
@@ -601,6 +699,17 @@ function registerIpc() {
     if (typeof patch.theme === 'string' && ['deep-space', 'mono-light', 'warm-night', 'contrast'].includes(patch.theme)) next.theme = patch.theme;
     if (typeof patch.phoneStyle === 'boolean') next.phoneStyle = patch.phoneStyle;
     if (typeof patch.waveform === 'boolean') next.waveform = patch.waveform;
+    if (typeof patch.aiVoiceReply === 'boolean') next.aiVoiceReply = patch.aiVoiceReply;
+    for (const key of ['chatBackground', 'callBackground']) {
+      if (patch[key] === undefined) continue;
+      const value = String(patch[key] || '');
+      // 允许清空、预设名，或不超过 4MB 的图片 data URL。
+      if (value && !/^(?:preset-[a-z0-9-]{1,30}|#[0-9a-fA-F]{6}|data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)$/.test(value)) {
+        throw new Error('背景格式无效');
+      }
+      if (value.length > 4 * 1024 * 1024) throw new Error('背景图片过大，请换一张');
+      next[key] = value;
+    }
     if (patch.toneText !== undefined) {
       if (typeof patch.toneText !== 'string' || patch.toneText.length > 2000) throw new Error('全局语气需要是 2000 字以内的文本');
       next.toneText = patch.toneText;
@@ -615,6 +724,9 @@ function registerIpc() {
       theme: config.theme,
       phoneStyle: config.phoneStyle !== false,
       waveform: config.waveform !== false,
+      aiVoiceReply: config.aiVoiceReply === true,
+      chatBackground: config.chatBackground || '',
+      callBackground: config.callBackground || '',
       toneId: config.activeToneId || '',
       toneText: config.toneText || '',
     };
@@ -630,10 +742,40 @@ function registerIpc() {
       throw new Error('对话参数无效');
     }
     const text = input.text.trim();
-    if (!text) throw new Error('消息不能为空');
+    const message = input.message && typeof input.message === 'object' ? input.message : null;
+    // 纯文字必须有内容；带附件的消息允许文字为空。
+    if (!text && !message) throw new Error('消息不能为空');
     if (!conversationStore) throw new Error('会话存储尚未准备好');
-    return { ticketId: startAgentChat(input.conversationId, text) };
+    return { ticketId: startAgentChat(input.conversationId, text, message) };
   });
+  ipcMain.handle('agent:transcribe', async (_event, dataUrl) => {
+    if (typeof dataUrl !== 'string') throw new Error('音频数据无效');
+    return transcribeAudio(dataUrl);
+  });
+  ipcMain.handle('agent:speak', async (_event, text) => {
+    if (typeof text !== 'string') throw new Error('朗读文字无效');
+    return synthesizeSpeech(text);
+  });
+  ipcMain.handle('favorites:list', () => favoriteStore.list());
+  ipcMain.handle('favorites:add', (_event, entry) => {
+    if (!entry || typeof entry !== 'object') throw new Error('收藏参数无效');
+    return favoriteStore.add(entry);
+  });
+  ipcMain.handle('favorites:remove', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('收藏 id 无效');
+    return favoriteStore.remove(id);
+  });
+  ipcMain.handle('favorites:clear', () => favoriteStore.clear());
+  ipcMain.handle('calls:list', () => callLogStore.list());
+  ipcMain.handle('calls:add', (_event, entry) => {
+    if (!entry || typeof entry !== 'object') throw new Error('通话记录参数无效');
+    return callLogStore.add(entry);
+  });
+  ipcMain.handle('calls:remove', (_event, id) => {
+    if (typeof id !== 'string') throw new Error('通话记录 id 无效');
+    return callLogStore.remove(id);
+  });
+  ipcMain.handle('calls:clear', () => callLogStore.clear());
   ipcMain.handle('agent:chat-abort', (_event, ticketId) => {
     if (typeof ticketId !== 'string') throw new Error('ticket id 无效');
     agentTickets.get(ticketId)?.controller.abort();
@@ -726,6 +868,8 @@ async function bootstrap() {
     config = loadConfig(app, { safeStorage });
     toneOptions = readTones();
     conversationStore = new ConversationStore(path.join(app.getPath('userData'), 'conversations'));
+    favoriteStore = new FavoriteStore(path.join(app.getPath('userData'), 'favorites.json'));
+    callLogStore = new CallLogStore(path.join(app.getPath('userData'), 'call-log.json'));
   } catch (error) {
     publish({ status: 'failed', message: error.message });
   }

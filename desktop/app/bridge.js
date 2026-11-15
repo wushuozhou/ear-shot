@@ -30,6 +30,11 @@
     phoneStyle: true,
     waveform: true,
     toneId: 'gentle',
+    aiVoiceReply: false,
+    chatBackground: '',
+    callBackground: '',
+    favorites: [],
+    callLog: [],
   };
   const real = window.electronAPI || window.desktop;
   const invoke = async (fn, fallback) => {
@@ -44,6 +49,9 @@
     phoneStyle: memory.phoneStyle,
     waveform: memory.waveform,
     toneId: memory.toneId,
+    aiVoiceReply: memory.aiVoiceReply,
+    chatBackground: memory.chatBackground,
+    callBackground: memory.callBackground,
   });
   const mock = {
     providers: {
@@ -108,7 +116,9 @@
         item.settings = { ...(item.settings || {}), ...patch };
         return item;
       },
-      chatStart: async (id, text) => { const item = memory.conversations.find(row => row.id === id); item?.messages.push({ role: 'user', content: text }, { role: 'assistant', content: `浏览器预览回复：${text}` }); return { ticketId: `mock-ticket-${Date.now()}` }; },
+      chatStart: async (id, text, message) => { const item = memory.conversations.find(row => row.id === id); if (item) { item.messages.push(message ? { ...message, role: 'user', id: `u-${Date.now()}` } : { role: 'user', kind: 'text', content: text, id: `u-${Date.now()}` }, { role: 'assistant', kind: 'text', content: `浏览器预览回复：${text || '[附件]'}`, id: `a-${Date.now()}` }); } return { ticketId: `mock-ticket-${Date.now()}` }; },
+      transcribe: async () => ({ text: '浏览器预览模式没有真实转写' }),
+      speak: async () => { throw new Error('浏览器预览模式不支持语音合成'); },
       chatAbort: async () => ({ ok: true }),
       onEvent: () => () => {},
       memoryGet: async () => ({ memoryBaseUrl: '', memoryEnabled: false }),
@@ -118,6 +128,18 @@
     settings: {
       get: async () => settingsSnapshot(),
       save: async patch => { Object.assign(memory, patch); return settingsSnapshot(); },
+    },
+    favorites: {
+      list: async () => memory.favorites,
+      add: async entry => { const item = { id: `f-${Date.now()}`, createdAt: new Date().toISOString(), source: entry.source || 'chat', title: entry.title || '', messages: entry.messages || [] }; memory.favorites.unshift(item); return item; },
+      remove: async id => { memory.favorites = memory.favorites.filter(item => item.id !== id); return { ok: true }; },
+      clear: async () => { const n = memory.favorites.length; memory.favorites = []; return { cleared: n }; },
+    },
+    calls: {
+      list: async () => memory.callLog,
+      add: async entry => { const item = { id: `c-${Date.now()}`, startedAt: new Date().toISOString(), ...entry }; memory.callLog.unshift(item); return item; },
+      remove: async id => { memory.callLog = memory.callLog.filter(item => item.id !== id); return { ok: true }; },
+      clear: async () => { const n = memory.callLog.length; memory.callLog = []; return { cleared: n }; },
     },
   };
   const desktop = real || mock;

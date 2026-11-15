@@ -224,23 +224,68 @@ async function testMemoryConnection({ memoryBaseUrl, fetchImpl = globalThis.fetc
 }
 
 const AVATAR_VALUE = /^(?:preset-[1-6]|data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)$/;
+// 聊天里支持的消息形态：纯文字、语音、图片、视频和普通文件。
+const MESSAGE_KINDS = ['text', 'voice', 'image', 'video', 'file'];
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+function normalizeAttachment(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const dataUrl = String(source.dataUrl || '');
+  if (!/^data:[\w.+-]+\/[\w.+-]+(?:;[\w.+-]+=[^;,]*)*;base64,[A-Za-z0-9+/=]*$/.test(dataUrl)) return null;
+  // base64 长度换算回字节数，挡住过大的附件。
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bytes = Math.floor(base64.length * 3 / 4);
+  if (bytes > MAX_ATTACHMENT_BYTES) return null;
+  return {
+    name: String(source.name || '').slice(0, 120),
+    mime: String(source.mime || '').slice(0, 120),
+    size: Number.isFinite(Number(source.size)) ? Math.max(0, Math.floor(Number(source.size))) : bytes,
+    durationMs: Number.isFinite(Number(source.durationMs)) ? Math.max(0, Math.floor(Number(source.durationMs))) : 0,
+    dataUrl,
+  };
+}
+
+function normalizeMessage(value) {
+  if (!value || typeof value !== 'object') return null;
+  const kind = MESSAGE_KINDS.includes(value.kind) ? value.kind : 'text';
+  const role = value.role === 'user' ? 'user' : 'assistant';
+  const content = String(value.content ?? '');
+  const message = { id: String(value.id || '').slice(0, 60) || messageId(), role, kind, content };
+  if (value.createdAt) message.createdAt = String(value.createdAt).slice(0, 40);
+  if (kind !== 'text') {
+    const attachment = normalizeAttachment(value.attachment);
+    // 附件丢失或过大时退回文字，避免留下点不开的空气泡。
+    if (!attachment) return content.trim() ? { ...message, kind: 'text' } : null;
+    message.attachment = attachment;
+    return message;
+  }
+  return content.trim() ? message : null;
+}
+
+function messageId() {
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function normalizeMessages(value) {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter(item => item && typeof item === 'object')
-    .map(item => ({
-      role: item.role === 'user' ? 'user' : 'assistant',
-      content: String(item.content ?? ''),
-    }))
-    .filter(item => item.content.trim() !== '');
+  return value.map(normalizeMessage).filter(Boolean);
+}
+
+// 列表预览：语音/图片/文件用占位词，和微信一致。
+function messageSummary(message) {
+  if (!message) return '';
+  if (message.kind === 'voice') return '[语音]';
+  if (message.kind === 'image') return '[图片]';
+  if (message.kind === 'video') return '[视频]';
+  if (message.kind === 'file') return `[文件] ${message.attachment?.name || ''}`.trim();
+  return String(message.content || '').replace(/\s+/g, ' ').trim();
 }
 
 function conversationPreview(messages) {
   const list = normalizeMessages(messages);
   const last = list[list.length - 1];
   if (!last) return '';
-  const text = last.content.replace(/\s+/g, ' ').trim();
+  const text = messageSummary(last);
   const body = text.length > 40 ? `${text.slice(0, 40)}…` : text;
   return last.role === 'user' ? `我：${body}` : body;
 }
@@ -339,12 +384,9 @@ class ConversationStore {
 
   append(id, message) {
     const conversation = this.load(id);
-    const content = String(message?.content ?? '');
-    if (!content.trim()) return conversation;
-    conversation.messages.push({
-      role: message.role === 'user' ? 'user' : 'assistant',
-      content,
-    });
+    const normalized = normalizeMessage({ ...message, id: message?.id || messageId(), createdAt: new Date().toISOString() });
+    if (!normalized) return conversation;
+    conversation.messages.push(normalized);
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
     return conversation;
@@ -404,6 +446,111 @@ class ConversationStore {
   }
 }
 
+// 收藏：可以收一句话、一段语音，也可以一次收好几条。
+class FavoriteStore {
+  constructor(file) {
+    this.file = file;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  }
+
+  list() {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  write(value) {
+    const temporary = `${this.file}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, this.file);
+  }
+
+  add(entry) {
+    const source = entry && typeof entry === 'object' ? entry : {};
+    const messages = normalizeMessages(source.messages);
+    if (!messages.length) throw new Error('没有可收藏的内容');
+    const item = {
+      id: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      source: String(source.source || '').slice(0, 20) === 'call' ? 'call' : 'chat',
+      conversationId: String(source.conversationId || '').slice(0, 80),
+      title: String(source.title || '').slice(0, 60),
+      note: String(source.note || '').slice(0, 500),
+      messages,
+    };
+    this.write([item, ...this.list()]);
+    return item;
+  }
+
+  remove(id) {
+    if (typeof id !== 'string' || !id) throw new Error('收藏 id 无效');
+    this.write(this.list().filter(item => item.id !== id));
+    return { ok: true };
+  }
+
+  clear() {
+    const count = this.list().length;
+    this.write([]);
+    return { cleared: count };
+  }
+}
+
+// 通话记录：给通话页的「最近通话」用。
+class CallLogStore {
+  constructor(file) {
+    this.file = file;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  }
+
+  list() {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  write(value) {
+    const temporary = `${this.file}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, this.file);
+  }
+
+  add(entry) {
+    const source = entry && typeof entry === 'object' ? entry : {};
+    const item = {
+      id: `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      conversationId: String(source.conversationId || '').slice(0, 80),
+      title: String(source.title || '').slice(0, 60),
+      number: String(source.number || '').replace(/\D/g, '').slice(0, 12),
+      avatar: AVATAR_VALUE.test(String(source.avatar || '')) ? String(source.avatar) : '',
+      direction: source.direction === 'incoming' ? 'incoming' : 'outgoing',
+      missed: source.missed === true,
+      durationMs: Number.isFinite(Number(source.durationMs)) ? Math.max(0, Math.floor(Number(source.durationMs))) : 0,
+      startedAt: String(source.startedAt || new Date().toISOString()).slice(0, 40),
+    };
+    // 只保留最近 200 条，避免文件无限增长。
+    this.write([item, ...this.list()].slice(0, 200));
+    return item;
+  }
+
+  remove(id) {
+    if (typeof id !== 'string' || !id) throw new Error('通话记录 id 无效');
+    this.write(this.list().filter(item => item.id !== id));
+    return { ok: true };
+  }
+
+  clear() {
+    const count = this.list().length;
+    this.write([]);
+    return { cleared: count };
+  }
+}
+
 function conversationMeta(conversation) {
   const settings = normalizeConversationSettings(conversation.settings);
   const messages = normalizeMessages(conversation.messages);
@@ -425,12 +572,16 @@ function readTones(file = path.join(__dirname, 'skills', 'tones.json')) {
 
 module.exports = {
   DEFAULT_PERSONA,
+  CallLogStore,
   ConversationStore,
+  FavoriteStore,
   buildSystemPrompt,
   conversationPreview,
   createSseParser,
   loadPersona,
+  messageSummary,
   normalizeConversationSettings,
+  normalizeMessage,
   normalizeMessages,
   readTones,
   recallMemories,

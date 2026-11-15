@@ -5,10 +5,14 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  CallLogStore,
   ConversationStore,
+  FavoriteStore,
   buildSystemPrompt,
   conversationPreview,
   createSseParser,
+  messageSummary,
+  normalizeMessage,
   normalizeMessages,
   recallMemories,
   storeMemory,
@@ -104,7 +108,10 @@ test('store rejects unusable ids, repairs bad records, and reports readable erro
       ...created,
       messages: [null, { role: 'tool', content: '  ' }, { role: 'user', content: '保留我' }],
     }));
-    assert.deepEqual(store.load(created.id).messages, [{ role: 'user', content: '保留我' }]);
+    const kept = store.load(created.id).messages;
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0].role, 'user');
+    assert.equal(kept[0].content, '保留我');
 
     fs.writeFileSync(file, '{not json');
     assert.throws(() => store.load(created.id), /已损坏/);
@@ -118,7 +125,10 @@ test('store rejects unusable ids, repairs bad records, and reports readable erro
 
 test('message normalization and preview stay safe for list rendering', () => {
   assert.deepEqual(normalizeMessages(undefined), []);
-  assert.deepEqual(normalizeMessages([{ role: 'user', content: 123 }]), [{ role: 'user', content: '123' }]);
+  const one = normalizeMessages([{ role: 'user', content: 123 }]);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].content, '123');
+  assert.equal(one[0].kind, 'text');
   assert.equal(conversationPreview([]), '');
   assert.equal(conversationPreview([{ role: 'user', content: '换行\n也要压平' }]), '我：换行 也要压平');
   assert.equal(conversationPreview([{ role: 'assistant', content: 'x'.repeat(60) }]).length, 41);
@@ -186,4 +196,73 @@ test('memory store remains POST with text and tag body', async () => {
   assert.equal(request.url, 'http://127.0.0.1:8765/api/store');
   assert.equal(request.options.method, 'POST');
   assert.deepEqual(JSON.parse(request.options.body), { text: '本轮摘要', tag: 'conversation' });
+});
+
+test('messages carry voice, image and file attachments with size limits', () => {
+  const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const voice = normalizeMessage({ role: 'user', kind: 'voice', content: '转写出来的话', attachment: { name: '语音', mime: 'audio/webm', size: 2048, durationMs: 3200, dataUrl: tiny } });
+  assert.equal(voice.kind, 'voice');
+  assert.equal(voice.attachment.durationMs, 3200);
+  assert.ok(voice.id);
+
+  const image = normalizeMessage({ role: 'user', kind: 'image', content: '', attachment: { name: 'a.png', mime: 'image/png', size: 10, dataUrl: tiny } });
+  assert.equal(image.kind, 'image');
+
+  // 附件坏掉但有文字时退回文字，没有文字则整条丢弃，避免出现点不开的空气泡。
+  assert.equal(normalizeMessage({ role: 'user', kind: 'image', content: '还有文字', attachment: { dataUrl: 'not-a-data-url' } }).kind, 'text');
+  assert.equal(normalizeMessage({ role: 'user', kind: 'image', content: '', attachment: { dataUrl: 'nope' } }), null);
+
+  // 超过 20MB 的附件不接收。
+  const huge = `data:image/png;base64,${'A'.repeat(21 * 1024 * 1024 * 4 / 3)}`;
+  assert.equal(normalizeMessage({ role: 'user', kind: 'image', content: '', attachment: { dataUrl: huge } }), null);
+});
+
+test('conversation preview uses placeholders for non-text messages', () => {
+  assert.equal(messageSummary({ kind: 'voice', content: 'x' }), '[语音]');
+  assert.equal(messageSummary({ kind: 'image' }), '[图片]');
+  assert.equal(messageSummary({ kind: 'video' }), '[视频]');
+  assert.equal(messageSummary({ kind: 'file', attachment: { name: 'r.pdf' } }), '[文件] r.pdf');
+  const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  assert.equal(conversationPreview([{ role: 'user', kind: 'image', attachment: { dataUrl: tiny } }]), '我：[图片]');
+});
+
+test('favorites keep single and multi message entries, and can be removed', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'earshot-fav-'));
+  try {
+    const store = new FavoriteStore(path.join(directory, 'favorites.json'));
+    assert.deepEqual(store.list(), []);
+    const one = store.add({ source: 'chat', title: '小满', messages: [{ role: 'assistant', content: '一句话' }] });
+    const many = store.add({ source: 'call', title: '阿年', messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }] });
+    assert.equal(store.list().length, 2);
+    assert.equal(store.list()[0].id, many.id, '最新的收藏排在前面');
+    assert.equal(many.messages.length, 2);
+    assert.equal(many.source, 'call');
+    assert.throws(() => store.add({ messages: [] }), /没有可收藏的内容/);
+    store.remove(one.id);
+    assert.equal(store.list().length, 1);
+    assert.equal(store.clear().cleared, 1);
+    assert.deepEqual(store.list(), []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('call log records direction, duration and keeps newest first', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'earshot-call-'));
+  try {
+    const store = new CallLogStore(path.join(directory, 'call-log.json'));
+    store.add({ conversationId: 'c1', title: '小满', number: '13800138000', avatar: 'preset-2', direction: 'outgoing', durationMs: 65000 });
+    const second = store.add({ conversationId: 'c2', title: '阿年', direction: 'incoming', missed: true });
+    const list = store.list();
+    assert.equal(list.length, 2);
+    assert.equal(list[0].id, second.id);
+    assert.equal(list[0].missed, true);
+    assert.equal(list[1].number, '13800138000');
+    assert.equal(list[1].durationMs, 65000);
+    store.remove(second.id);
+    assert.equal(store.list().length, 1);
+    assert.equal(store.clear().cleared, 1);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

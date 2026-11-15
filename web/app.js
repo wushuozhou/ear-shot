@@ -53,6 +53,23 @@ function applyContact(detail) {
   if (typeof detail.model === 'string') CONTACT.model = detail.model;
   if (typeof detail.style === 'string') CONTACT.style = detail.style;
   if (typeof detail.wave === 'boolean') SHOW_WAVE = detail.wave;
+  // 自定义通话背景：图片用 data URL，纯色直接当颜色值；留空就是默认纯黑。
+  if (typeof detail.background === 'string') {
+    const value = detail.background;
+    if (value.startsWith('data:image/')) {
+      document.body.style.backgroundImage = `url("${value}")`;
+      document.body.style.backgroundColor = '';
+      document.body.classList.add('has-background');
+    } else if (value) {
+      document.body.style.backgroundImage = '';
+      document.body.style.backgroundColor = value;
+      document.body.classList.remove('has-background');
+    } else {
+      document.body.style.backgroundImage = '';
+      document.body.style.backgroundColor = '';
+      document.body.classList.remove('has-background');
+    }
+  }
   const label = CONTACT.name || INFO.name;
   document.querySelectorAll('.name').forEach(node => { node.textContent = label; });
   document.title = label;
@@ -519,7 +536,8 @@ function drawWave() {
 
 function openSettings() { $('#settings').showModal(); $('#token').value = store.get('token'); $('#dictation').checked = store.get('dictation') === '1'; $('#dictation').disabled = !SR; $('#barge').checked = store.get('barge') === '1'; }
 $('#settings form').addEventListener('submit', () => { store.set('token', $('#token').value.trim()); store.set('dictation', $('#dictation').checked ? '1' : '0'); store.set('barge', $('#barge').checked ? '1' : '0'); });
-$('#open-settings').addEventListener('click', openSettings);
+// 通话界面不再放设置入口，这些开关统一收在桌面端「设置 → 通话与聊天」里。
+$('#open-settings')?.addEventListener('click', openSettings);
 $('#call').addEventListener('click', startCall);
 $('#hangup').addEventListener('click', () => call?.hangup());
 $('#mute').addEventListener('click', e => { const m = call?.toggleMute(); e.currentTarget.classList.toggle('on', !!m); e.currentTarget.setAttribute('aria-pressed', String(!!m)); });

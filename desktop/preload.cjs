@@ -72,9 +72,18 @@ contextBridge.exposeInMainWorld('desktop', {
       if (typeof id !== 'string') throw new TypeError('语气 id 必须是字符串');
       return ipcRenderer.invoke('agent:tone-set', id);
     },
-    chatStart: (conversationId, text) => {
+    chatStart: (conversationId, text, message) => {
       if (typeof conversationId !== 'string' || typeof text !== 'string') throw new TypeError('对话参数无效');
-      return ipcRenderer.invoke('agent:chat-start', { conversationId, text });
+      if (message !== undefined && (message === null || typeof message !== 'object')) throw new TypeError('消息参数无效');
+      return ipcRenderer.invoke('agent:chat-start', { conversationId, text, message });
+    },
+    transcribe: dataUrl => {
+      if (typeof dataUrl !== 'string') throw new TypeError('音频数据必须是字符串');
+      return ipcRenderer.invoke('agent:transcribe', dataUrl);
+    },
+    speak: text => {
+      if (typeof text !== 'string') throw new TypeError('朗读文字必须是字符串');
+      return ipcRenderer.invoke('agent:speak', text);
     },
     chatAbort: ticketId => {
       if (typeof ticketId !== 'string') throw new TypeError('ticket id 必须是字符串');
@@ -120,6 +129,30 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.on('agent:event', listener);
       return () => ipcRenderer.removeListener('agent:event', listener);
     },
+  },
+  favorites: {
+    list: () => ipcRenderer.invoke('favorites:list'),
+    add: entry => {
+      if (!entry || typeof entry !== 'object') throw new TypeError('收藏参数无效');
+      return ipcRenderer.invoke('favorites:add', entry);
+    },
+    remove: id => {
+      if (typeof id !== 'string') throw new TypeError('收藏 id 必须是字符串');
+      return ipcRenderer.invoke('favorites:remove', id);
+    },
+    clear: () => ipcRenderer.invoke('favorites:clear'),
+  },
+  calls: {
+    list: () => ipcRenderer.invoke('calls:list'),
+    add: entry => {
+      if (!entry || typeof entry !== 'object') throw new TypeError('通话记录参数无效');
+      return ipcRenderer.invoke('calls:add', entry);
+    },
+    remove: id => {
+      if (typeof id !== 'string') throw new TypeError('通话记录 id 必须是字符串');
+      return ipcRenderer.invoke('calls:remove', id);
+    },
+    clear: () => ipcRenderer.invoke('calls:clear'),
   },
   onState: callback => {
     const listener = (_event, state) => callback(state);

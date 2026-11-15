@@ -87,7 +87,7 @@ button { cursor: pointer; }
 .service-indicator i { width: 8px; height: 8px; display: block; border-radius: 50%; background: var(--muted); }
 .service-indicator i.ready { background: var(--accent); }
 .service-indicator i.failed { background: var(--danger); }
-.main { min-width: 0; flex: 1; }
+.main { min-width: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .topbar { height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 0 30px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .topbar-title { font-size: 20px; font-weight: 600; }
 .topbar-actions { display: flex; align-items: center; gap: 14px; }
@@ -97,7 +97,7 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .status-ready { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .status-starting { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 .status-failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
-.content { max-width: 1320px; margin: 0 auto; padding: 30px; }
+.content { max-width: 1320px; width: 100%; margin: 0 auto; padding: 22px 30px; flex: 1; min-height: 0; overflow-y: auto; }
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 25px; }
 .page-heading h1 { margin: 0 0 7px; font-size: 25px; }
 .page-heading p { margin: 0; color: var(--muted); font-size: 13px; }
@@ -168,7 +168,7 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
   .provider-grid { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
 }
 
-.conversation-layout { height: calc(100vh - 130px); display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
+.conversation-layout { height: calc(100vh - 62px); display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
 .conversation-list { min-width: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .conversation-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .conversation-list-head strong { font-size: 13px; }
@@ -220,9 +220,105 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .message-bubble pre code { padding: 0; color: var(--text); background: transparent; }
 .message-bubble ul { margin: 5px 0; padding-left: 20px; }
 .message-bubble br { line-height: 1.4; }
-.message-form { display: flex; align-items: flex-end; gap: 9px; margin-top: 12px; }
+.message-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .message-form textarea { min-height: 52px; max-height: 150px; resize: vertical; }
 .message-form .button { flex: 0 0 auto; min-height: 42px; }
+.compose-row { display: flex; align-items: flex-end; gap: 9px; }
+.compose-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.compose-icon { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); background: var(--panel); cursor: pointer; }
+.compose-icon svg { width: 18px; height: 18px; }
+.compose-icon:hover:not(:disabled) { color: var(--text); border-color: var(--focus); }
+.compose-icon:disabled { opacity: .45; cursor: not-allowed; }
+.compose-icon.recording { color: #fff; background: var(--danger); border-color: var(--danger); }
+.compose-voice-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.compose-voice-toggle.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+.compose-voice-toggle input { width: auto; margin: 0; accent-color: var(--focus); }
+.recording-tip { color: var(--danger); font-size: 12px; }
+
+/* 语音、图片、视频与文件气泡 */
+.message-bubble-media { padding: 0; background: transparent; }
+.message-row.user .message-bubble-media { background: transparent; }
+/* 媒体气泡自带底色，不要继承用户气泡的白字，否则浅底上看不见。 */
+.message-row.user .message-bubble-media,
+.message-row.user .message-bubble-media .message-file { color: var(--text); }
+.voice-wrap { display: grid; gap: 5px; justify-items: start; }
+.message-row.user .voice-wrap { justify-items: end; }
+.voice-bubble { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border: 0; border-radius: 12px; color: var(--text); background: var(--panel); cursor: pointer; }
+.message-row.user .voice-bubble { color: var(--accent-text); background: var(--accent); }
+.voice-bubble .voice-icon { display: grid; place-items: center; }
+.voice-bubble svg { width: 17px; height: 17px; }
+.voice-bubble.playing .voice-icon { animation: voice-pulse 1s ease-in-out infinite; }
+@keyframes voice-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.voice-text { max-width: 240px; padding: 6px 10px; border-radius: 9px; color: var(--muted); background: var(--panel-2); font-size: 12px; line-height: 1.6; text-align: left; }
+.message-image-box { display: inline-block; border-radius: 11px; overflow: hidden; }
+.message-image-box.broken { padding: 14px 16px; color: var(--muted); background: var(--panel-2); font-size: 12px; }
+.message-image-box.broken .message-image { display: none; }
+.message-image { display: block; min-width: 90px; min-height: 60px; max-width: 240px; max-height: 260px; border-radius: 11px; background: var(--panel-2); object-fit: cover; }
+.message-video { display: block; max-width: 280px; border-radius: 11px; }
+.message-file { display: flex; align-items: center; gap: 10px; min-width: 190px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+.message-file-icon svg { width: 24px; height: 24px; color: var(--muted); }
+.message-file strong { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.message-file span { color: var(--faint); font-size: 11px; }
+
+/* 多选收藏 */
+.message-row.selectable { cursor: pointer; border-radius: 10px; padding: 3px; }
+.message-row.selectable:hover { background: var(--panel-2); }
+.message-row.selected { background: color-mix(in srgb, var(--focus) 12%, transparent); }
+.message-check { display: grid; place-items: center; width: 20px; height: 20px; margin: auto 6px; border: 1px solid var(--border); border-radius: 50%; color: var(--accent-text); font-size: 12px; }
+.message-row.selected .message-check { background: var(--focus); border-color: var(--focus); }
+
+/* 通话页三个标签 */
+.call-tabs { display: flex; gap: 4px; padding: 5px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2); }
+.call-tab { flex: 1 1 0; min-width: 0; padding: 8px 10px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: 13px; line-height: 1.3; cursor: pointer; }
+.call-tab.active { color: var(--text); background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.call-body { min-height: 0; }
+.call-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.call-log-list { display: grid; gap: 7px; }
+.call-log-row { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+.call-log-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.call-log-text strong { font-size: 13px; }
+.call-log-text strong.missed { color: var(--danger); }
+.call-log-text span { color: var(--faint); font-size: 11px; }
+
+/* iOS 风格拨号盘 */
+.keypad { max-width: 320px; margin: 24px auto 0; display: grid; gap: 14px; justify-items: center; }
+.keypad-display { min-height: 38px; font-size: 30px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.keypad-hint { color: var(--muted); font-size: 12px; min-height: 1em; }
+.keypad-grid { display: grid; grid-template-columns: repeat(3, 72px); gap: 14px; }
+.keypad-key { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: var(--text); background: var(--panel-2); cursor: pointer; }
+.keypad-key:hover { background: var(--border); }
+.keypad-key strong { font-size: 26px; font-weight: 400; line-height: 1; }
+.keypad-key span { color: var(--faint); font-size: 9px; letter-spacing: .14em; }
+.keypad-actions { display: grid; grid-template-columns: repeat(3, 72px); gap: 14px; align-items: center; justify-items: center; }
+/* iOS 的拨号键是饱和绿配白图标。 */
+.keypad-dial { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #30D158; box-shadow: 0 6px 18px rgba(48,209,88,.32); cursor: pointer; }
+.keypad-dial svg { width: 30px; height: 30px; color: #fff; fill: #fff; }
+.keypad-dial:disabled { opacity: .35; box-shadow: none; cursor: not-allowed; }
+.keypad-back { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: var(--panel-2); cursor: pointer; }
+.keypad-back:hover:not(:disabled) { color: var(--text); background: var(--border); }
+.keypad-back svg { width: 26px; height: 26px; }
+.keypad-back:disabled { opacity: .3; cursor: not-allowed; }
+
+/* 收藏 */
+.favorite-card { margin-bottom: 10px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.favorite-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; padding-right: 2px; }
+.favorite-head strong { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-head span { flex: 0 0 auto; color: var(--faint); font-size: 11px; }
+.favorite-messages { display: grid; gap: 7px; }
+.favorite-line { display: flex; align-items: flex-start; gap: 9px; }
+.favorite-who { flex: 0 0 auto; min-width: 42px; color: var(--faint); font-size: 11px; padding-top: 3px; }
+/* 气泡按内容宽度收缩，短句不再拉成一整条。 */
+.favorite-text { max-width: min(560px, 100%); padding: 7px 11px; border-radius: 9px; background: var(--panel-2); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.favorite-line.user .favorite-text { color: var(--accent-text); background: var(--accent); }
+
+/* 背景选择 */
+.background-field { display: grid; gap: 8px; margin-bottom: 14px; }
+.background-title { color: var(--muted); font-size: 12px; }
+.background-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.background-preview { display: grid; place-items: center; width: 56px; height: 38px; border: 1px solid var(--border); border-radius: 8px; color: var(--faint); font-size: 10px; }
+.background-swatches { display: flex; gap: 6px; }
+.background-swatch { width: 30px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: 7px; color: var(--faint); background: var(--panel); font-size: 9px; cursor: pointer; }
+.background-swatch:hover { border-color: var(--focus); }
 .stop-button { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: transparent; }
 .conversation-hint { margin-top: 7px; color: var(--faint); font-size: 11px; }
 .memory-test-result { min-height: 18px; margin-top: 6px; font-size: 12px; }
@@ -372,8 +468,8 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .call-contact-info { flex: 1; min-width: 0; display: grid; gap: 3px; }
 .call-contact-info strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .call-contact-info span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.call-dial { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #FFFFFF; background: #3DBF7A; }
-.call-dial:hover { background: #35A96B; }
+.call-dial { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #FFFFFF; background: #30D158; }
+.call-dial:hover { background: #28B84C; }
 .call-dial svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
 .call-stage-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .call-stage-label { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }

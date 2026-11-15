@@ -1,10 +1,13 @@
-:root { --bg1:#2B3654; --bg2:#353656; --bg3:#4A3B5A; --ink:#FBF6EE; --dim:rgba(222,222,240,.6); --her:#FF9C8C; --cyan:#7FD3CF; }
+:root { --bg1:#000000; --bg2:#050505; --bg3:#0B0B0D; --ink:#FBF6EE; --dim:rgba(222,222,240,.6); --her:#FF9C8C; --cyan:#7FD3CF; }
 * { box-sizing:border-box; }
 html,body { margin:0; height:100%; }
+/* 参考 iOS 通话界面：默认纯黑底，桌面端可以换成自定义背景。 */
 body { font:16px/1.5 -apple-system, "Inter", "Noto Sans SC", "PingFang SC", system-ui, sans-serif; color:var(--ink);
-  background:linear-gradient(160deg,var(--bg1),var(--bg2) 55%,var(--bg3)); background-attachment:fixed; -webkit-font-smoothing:antialiased; }
+  background:#000; background-attachment:fixed; -webkit-font-smoothing:antialiased; }
+body.has-background { background-size:cover; background-position:center; }
 body::before { content:""; position:fixed; inset:0; pointer-events:none;
-  background:radial-gradient(40% 30% at 80% 15%,rgba(255,150,130,.16),transparent 70%),radial-gradient(45% 35% at 10% 55%,rgba(110,200,200,.10),transparent 70%),radial-gradient(45% 35% at 85% 90%,rgba(185,160,240,.16),transparent 70%); }
+  background:radial-gradient(60% 40% at 50% 0%,rgba(255,255,255,.06),transparent 70%); }
+body.has-background::before { background:rgba(0,0,0,.35); }
 button { font:inherit; color:inherit; cursor:pointer; }
 
 #home { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:24px; position:relative; }

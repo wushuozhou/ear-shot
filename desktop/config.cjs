@@ -35,6 +35,9 @@ const DEFAULT_CONFIG = {
   theme: 'mono-light',
   phoneStyle: true,
   waveform: true,
+  aiVoiceReply: false,
+  chatBackground: '',
+  callBackground: '',
 };
 
 // v3: 外观默认改为浅色；电话样式聊天与通话波形默认开启。
