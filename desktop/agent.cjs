@@ -59,10 +59,12 @@ function buildSystemPrompt({ persona, tone, memories }) {
   ].join('\n');
 }
 
-function classifyHttpError(status) {
+function classifyHttpError(status, { hasImage = false } = {}) {
   if (status === 401 || status === 403) return '鉴权失败，请检查 API Key 或权限';
   if (status === 404) return '地址或模型不存在，请检查 Base URL 和模型名称';
   if (status === 429) return '请求过于频繁或额度不足';
+  // 带图时的 400 多半是模型不认图片输入，给出可操作的提示。
+  if (status === 400 && hasImage) return '这个模型可能不支持图片输入，请换成支持视觉的模型，或在设置里关掉「让 AI 看图片」';
   if (status >= 500) return `供应商服务异常（HTTP ${status}）`;
   return `请求失败（HTTP ${status}）`;
 }
@@ -132,7 +134,11 @@ async function streamChat({ provider, messages, signal, onDelta, onDone, onError
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw Object.assign(new Error(classifyHttpError(response.status)), { kind: 'http' });
+    if (!response.ok) {
+      const hasImage = Array.isArray(messages) && messages.some(item => Array.isArray(item?.content)
+        && item.content.some(part => part?.type === 'image_url'));
+      throw Object.assign(new Error(classifyHttpError(response.status, { hasImage })), { kind: 'http' });
+    }
     if (!response.body || typeof response.body[Symbol.asyncIterator] !== 'function') {
       throw Object.assign(new Error('响应格式异常：供应商没有返回流式内容'), { kind: 'format' });
     }
@@ -285,7 +291,11 @@ function conversationPreview(messages) {
   const list = normalizeMessages(messages);
   const last = list[list.length - 1];
   if (!last) return '';
-  const text = messageSummary(last);
+  // 引用前缀（"> 对方：…"）只在气泡里展开，列表预览只显示正文。
+  const stripped = String(last.content || '').replace(/^>\s?.*?\n\n/s, '');
+  const text = last.kind === 'text' || !last.kind
+    ? stripped.replace(/\s+/g, ' ').trim()
+    : messageSummary(last);
   const body = text.length > 40 ? `${text.slice(0, 40)}…` : text;
   return last.role === 'user' ? `我：${body}` : body;
 }
@@ -387,6 +397,17 @@ class ConversationStore {
     const normalized = normalizeMessage({ ...message, id: message?.id || messageId(), createdAt: new Date().toISOString() });
     if (!normalized) return conversation;
     conversation.messages.push(normalized);
+    conversation.updatedAt = new Date().toISOString();
+    this.saveConversation(conversation);
+    return conversation;
+  }
+
+  // 删掉单条消息，用于聊天里的「删除」菜单。
+  removeMessage(id, messageId2) {
+    const conversation = this.load(id);
+    const next = conversation.messages.filter(item => item.id !== messageId2);
+    if (next.length === conversation.messages.length) return conversation;
+    conversation.messages = next;
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
     return conversation;

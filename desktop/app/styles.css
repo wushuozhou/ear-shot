@@ -218,14 +218,39 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .model-label { max-width: 190px; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .memory-toggle { display: inline-flex !important; white-space: nowrap; }
 .memory-toggle input { width: auto; accent-color: var(--blue-strong); }
-.message-stream { min-height: 0; flex: 1; overflow-y: auto; padding: 8px 10px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
-.message-empty { height: 100%; display: grid; place-items: center; padding: 35px; color: var(--muted); text-align: center; line-height: 1.8; }
-.message-empty strong { display: block; margin-bottom: 5px; color: var(--text); font-size: 17px; }
-.message-row { display: flex; width: min(760px, 100%); margin: 13px auto; gap: 9px; }
+/* 聊天区按微信的观感：浅灰底、气泡带小尖角、自己的气泡用微信绿。 */
+.message-stream { min-height: 0; flex: 1; overflow-y: auto; padding: 14px 16px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--chat-bg, #F2F2F2); }
+:root[data-theme="deep-space"] .message-stream,
+:root[data-theme="warm-night"] .message-stream { background: var(--chat-bg, var(--bg)); }
+.message-row { display: flex; width: min(760px, 100%); margin: 14px auto; gap: 10px; align-items: flex-start; }
 .message-row.user { justify-content: flex-end; }
 .message-row.assistant { justify-content: flex-start; }
-.message-bubble { max-width: min(760px, 82%); padding: 10px 13px; border-radius: 10px; color: var(--text); background: var(--panel); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
-.message-row.user .message-bubble { color: var(--accent-text); background: var(--accent); }
+.message-bubble { position: relative; max-width: min(760px, 70%); padding: 9px 13px; border-radius: 6px; color: #191919; background: #FFFFFF; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; cursor: default; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
+/* 气泡尖角 */
+.message-row.assistant .message-bubble::before,
+.message-row.user .message-bubble::before { content: ''; position: absolute; top: 11px; width: 0; height: 0; border: 5px solid transparent; }
+.message-row.assistant .message-bubble::before { left: -9px; border-right-color: #FFFFFF; }
+.message-row.user .message-bubble::before { right: -9px; border-left-color: #95EC69; }
+.message-row.user .message-bubble { color: #191919; background: #95EC69; }
+:root[data-theme="deep-space"] .message-bubble,
+:root[data-theme="warm-night"] .message-bubble,
+:root[data-theme="contrast"] .message-bubble { color: var(--text); background: var(--panel); }
+:root[data-theme="deep-space"] .message-row.assistant .message-bubble::before,
+:root[data-theme="warm-night"] .message-row.assistant .message-bubble::before,
+:root[data-theme="contrast"] .message-row.assistant .message-bubble::before { border-right-color: var(--panel); }
+:root[data-theme="deep-space"] .message-row.user .message-bubble,
+:root[data-theme="warm-night"] .message-row.user .message-bubble,
+:root[data-theme="contrast"] .message-row.user .message-bubble { color: var(--accent-text); background: var(--accent); }
+:root[data-theme="deep-space"] .message-row.user .message-bubble::before,
+:root[data-theme="warm-night"] .message-row.user .message-bubble::before,
+:root[data-theme="contrast"] .message-row.user .message-bubble::before { border-left-color: var(--accent); }
+/* 气泡内的引用块 */
+.bubble-quote { margin: -2px 0 7px; padding: 6px 9px; border-left: 3px solid rgba(0,0,0,.18); border-radius: 3px; background: rgba(0,0,0,.05); color: rgba(0,0,0,.55); font-size: 12px; line-height: 1.5; }
+.message-row.user .bubble-quote { border-left-color: rgba(0,0,0,.22); background: rgba(255,255,255,.4); }
+:root[data-theme="deep-space"] .bubble-quote,
+:root[data-theme="warm-night"] .bubble-quote { border-left-color: var(--border); background: var(--panel-2); color: var(--muted); }
+.message-empty { height: 100%; display: grid; place-items: center; padding: 35px; color: var(--muted); text-align: center; line-height: 1.8; }
+.message-empty strong { display: block; margin-bottom: 5px; color: var(--text); font-size: 17px; }
 .message-bubble p { margin: 0 0 9px; }
 .message-bubble p:last-child { margin-bottom: 0; }
 .message-bubble strong { font-weight: 700; }
@@ -248,13 +273,30 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .compose-icon.recording { color: #fff; background: var(--danger); border-color: var(--danger); }
 .compose-voice-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .compose-voice-toggle.on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+/* 微信式气泡菜单 */
+.message-menu { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 4px; border-radius: 8px; background: #4C4C4C; box-shadow: 0 6px 20px rgba(0,0,0,.28); }
+.message-menu-item { display: grid; justify-items: center; gap: 3px; min-width: 52px; padding: 7px 8px; border: 0; border-radius: 6px; color: #fff; background: transparent; font-size: 11px; cursor: pointer; }
+.message-menu-item:hover { background: rgba(255,255,255,.14); }
+.message-menu-item.danger { color: #FF8A80; }
+.message-menu-item.danger:hover { background: rgba(255,138,128,.18); }
+.message-menu-item svg { width: 17px; height: 17px; }
+
+/* 引用栏 */
+.compose-quote { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-left: 3px solid var(--focus); border-radius: 4px; background: var(--panel-2); }
+.compose-quote-text { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.compose-quote-close { flex: 0 0 auto; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.compose-quote-close:hover { color: var(--text); background: var(--border); }
+.compose-quote-close svg { width: 12px; height: 12px; }
+
 .compose-voice-toggle input { width: auto; margin: 0; accent-color: var(--focus); }
 .compose-hint { color: var(--faint); font-size: 11px; }
 .message-form.dropping { outline: 2px dashed var(--focus); outline-offset: 4px; border-radius: 10px; }
 .recording-tip { color: var(--danger); font-size: 12px; }
 
 /* 语音、图片、视频与文件气泡 */
-.message-bubble-media { padding: 0; background: transparent; }
+/* 媒体气泡本身自带底色，不要画尖角，也不要继承文字气泡的配色。 */
+.message-bubble-media { padding: 0; background: transparent; box-shadow: none; }
+.message-bubble-media::before { display: none !important; }
 .message-row.user .message-bubble-media { background: transparent; }
 /* 媒体气泡自带底色，不要继承用户气泡的白字，否则浅底上看不见。 */
 .message-row.user .message-bubble-media,
@@ -262,7 +304,11 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .voice-wrap { display: grid; gap: 5px; justify-items: start; }
 .message-row.user .voice-wrap { justify-items: end; }
 .voice-bubble { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border: 0; border-radius: 12px; color: var(--text); background: var(--panel); cursor: pointer; }
-.message-row.user .voice-bubble { color: var(--accent-text); background: var(--accent); }
+/* 自己的语音条跟文字气泡同一套绿，避免同为「我发的」却一绿一蓝。 */
+.message-row.user .voice-bubble { color: #191919; background: #95EC69; }
+:root[data-theme="deep-space"] .message-row.user .voice-bubble,
+:root[data-theme="warm-night"] .message-row.user .voice-bubble,
+:root[data-theme="contrast"] .message-row.user .voice-bubble { color: var(--accent-text); background: var(--accent); }
 .voice-bubble .voice-icon { display: grid; place-items: center; }
 .voice-bubble svg { width: 17px; height: 17px; }
 .voice-bubble.playing .voice-icon { animation: voice-pulse 1s ease-in-out infinite; }
@@ -318,16 +364,21 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .keypad-back:disabled { opacity: .3; cursor: not-allowed; }
 
 /* 收藏 */
-.favorite-card { margin-bottom: 10px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
-.favorite-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; padding-right: 2px; }
+/* 收藏：按微信收藏的卡片风格，顶部一行标题与时间，下面是内容 */
+.favorite-card { margin-bottom: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.favorite-card:hover { border-color: var(--focus); }
+.favorite-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-right: 2px; }
 .favorite-head strong { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .favorite-head span { flex: 0 0 auto; color: var(--faint); font-size: 11px; }
-.favorite-messages { display: grid; gap: 7px; }
+.favorite-messages { display: grid; gap: 8px; padding-left: 10px; border-left: 2px solid var(--border); }
 .favorite-line { display: flex; align-items: flex-start; gap: 9px; }
-.favorite-who { flex: 0 0 auto; min-width: 42px; color: var(--faint); font-size: 11px; padding-top: 3px; }
+.favorite-who { flex: 0 0 auto; min-width: 34px; color: var(--faint); font-size: 11px; padding-top: 4px; }
 /* 气泡按内容宽度收缩，短句不再拉成一整条。 */
-.favorite-text { max-width: min(560px, 100%); padding: 7px 11px; border-radius: 9px; background: var(--panel-2); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
-.favorite-line.user .favorite-text { color: var(--accent-text); background: var(--accent); }
+.favorite-text { max-width: min(560px, 100%); padding: 7px 11px; border-radius: 6px; background: var(--panel-2); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.favorite-line.user .favorite-text { color: #191919; background: #95EC69; }
+:root[data-theme="deep-space"] .favorite-line.user .favorite-text,
+:root[data-theme="warm-night"] .favorite-line.user .favorite-text { color: var(--accent-text); background: var(--accent); }
+.favorite-tag { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: 10px; }
 
 /* 背景选择 */
 .background-field { display: grid; gap: 8px; margin-bottom: 14px; }
@@ -451,7 +502,7 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-identity { min-width: 0; display: flex; align-items: center; gap: 11px; }
 .conversation-identity h1 { margin: 0; font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-number { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.message-row { gap: 9px; }
+.message-row { gap: 10px; align-items: flex-start; }
 
 /* 电话样式的聊天界面 */
 /* 设置：头像 / 语气 / 开关 */

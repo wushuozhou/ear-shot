@@ -249,15 +249,23 @@ function startAgentChat(conversationId, userText, userMessage = null) {
         memoryEnabled: config.memoryEnabled,
         query: userText,
       });
+      // 多模态：图片按 OpenAI vision 格式随消息发给模型；关掉或模型不支持时退回文字占位。
+      const vision = config.visionEnabled === true;
       const messages = [
         { role: 'system', content: buildSystemPrompt({ persona, tone, memories }) },
-        // 模型只吃文字：语音转写后的文字直接用，图片/文件用占位描述说明。
-        ...conversation.messages.map(item => ({
-          role: item.role,
-          content: item.kind && item.kind !== 'text' && !String(item.content || '').trim()
-            ? messageSummary(item)
-            : String(item.content || ''),
-        })).filter(item => item.content.trim()),
+        ...conversation.messages.map(item => {
+          const text = String(item.content || '').trim();
+          if (vision && item.kind === 'image' && item.attachment?.dataUrl) {
+            const parts = [{ type: 'image_url', image_url: { url: item.attachment.dataUrl } }];
+            if (text) parts.unshift({ type: 'text', text });
+            return { role: item.role, content: parts };
+          }
+          return {
+            role: item.role,
+            // 语音转写后的文字直接用，其余非文字消息用占位描述说明。
+            content: item.kind && item.kind !== 'text' && !text ? messageSummary(item) : text,
+          };
+        }).filter(item => Array.isArray(item.content) || item.content.trim()),
       ];
       const completed = await streamChat({
         provider: activeLlmProvider(conversationSettings.model),
@@ -685,6 +693,7 @@ function registerIpc() {
     phoneStyle: config.phoneStyle !== false,
     waveform: config.waveform !== false,
     aiVoiceReply: config.aiVoiceReply === true,
+    visionEnabled: config.visionEnabled === true,
     chatBackground: config.chatBackground || '',
     callBackground: config.callBackground || '',
     toneId: config.activeToneId || '',
@@ -700,6 +709,7 @@ function registerIpc() {
     if (typeof patch.phoneStyle === 'boolean') next.phoneStyle = patch.phoneStyle;
     if (typeof patch.waveform === 'boolean') next.waveform = patch.waveform;
     if (typeof patch.aiVoiceReply === 'boolean') next.aiVoiceReply = patch.aiVoiceReply;
+    if (typeof patch.visionEnabled === 'boolean') next.visionEnabled = patch.visionEnabled;
     for (const key of ['chatBackground', 'callBackground']) {
       if (patch[key] === undefined) continue;
       const value = String(patch[key] || '');
@@ -725,6 +735,7 @@ function registerIpc() {
       phoneStyle: config.phoneStyle !== false,
       waveform: config.waveform !== false,
       aiVoiceReply: config.aiVoiceReply === true,
+      visionEnabled: config.visionEnabled === true,
       chatBackground: config.chatBackground || '',
       callBackground: config.callBackground || '',
       toneId: config.activeToneId || '',
@@ -789,6 +800,10 @@ function registerIpc() {
     abortConversationTickets(id);
     conversationStore.delete(id);
     return { ok: true };
+  });
+  ipcMain.handle('agent:message-delete', (_event, input) => {
+    if (!input || typeof input.id !== 'string' || typeof input.messageId !== 'string') throw new Error('消息参数无效');
+    return conversationStore.removeMessage(input.id, input.messageId);
   });
   ipcMain.handle('agent:conversation-clear', (_event, id) => {
     if (typeof id !== 'string') throw new Error('会话 id 无效');

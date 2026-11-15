@@ -22,7 +22,9 @@ const state = {
   selectMode: false,
   selected: new Set(),
   recording: null,
+  quote: null,
   aiVoiceReply: false,
+  visionEnabled: false,
   chatBackground: '',
   callBackground: '',
   favorites: [],
@@ -691,15 +693,28 @@ function renderConversationMessages() {
     const bubble = document.createElement('div');
     bubble.className = `message-bubble${message.kind && message.kind !== 'text' ? ' message-bubble-media' : ''}`;
     if (!message.kind || message.kind === 'text') {
-      bubble.innerHTML = renderMarkdown(stripStageDirections(message.content));
+      // 开头的 "> 引用" 单独渲染成引用块，正文另起，和微信的引用回复一致。
+      const raw = String(message.content || '');
+      const quoted = /^>\s?(.+?)\n\n([\s\S]*)$/.exec(raw);
+      if (quoted) {
+        const quoteBlock = document.createElement('div');
+        quoteBlock.className = 'bubble-quote';
+        quoteBlock.textContent = quoted[1];
+        const body = document.createElement('div');
+        body.innerHTML = renderMarkdown(stripStageDirections(quoted[2]));
+        bubble.append(quoteBlock, body);
+      } else {
+        bubble.innerHTML = renderMarkdown(stripStageDirections(raw));
+      }
     } else {
       bubble.append(attachmentBubble(message));
     }
     const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar');
     if (role === 'user') row.append(bubble, avatar);
     else row.append(avatar, bubble);
-    // 多选模式下，整行可勾选用来批量收藏。
-    if (state.selectMode && !streaming && message.id) {
+    if (streaming || !message.id) return row;
+    // 多选时整行可勾选；非多选时左键/右键都弹出微信式操作菜单。
+    if (state.selectMode) {
       row.classList.add('selectable');
       const checked = state.selected.has(message.id);
       row.classList.toggle('selected', checked);
@@ -712,13 +727,15 @@ function renderConversationMessages() {
         else state.selected.add(message.id);
         renderConversation();
       });
-    } else if (!streaming && message.id) {
-      // 右键单条收藏，和微信的长按菜单对应。
-      row.addEventListener('contextmenu', event => {
-        event.preventDefault();
-        favoriteMessages([message]);
-      });
+      return row;
     }
+    const openMenu = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMessageMenu(message, event.clientX, event.clientY, bubble.getBoundingClientRect());
+    };
+    bubble.addEventListener('click', openMenu);
+    row.addEventListener('contextmenu', openMenu);
     return row;
   };
   if (!messages.length && !state.streamingText) {
@@ -733,6 +750,90 @@ function renderConversationMessages() {
     if (state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
   }
   stream.scrollTop = stream.scrollHeight;
+}
+
+// 微信式气泡菜单：复制 / 收藏 / 引用 / 多选 / 删除。
+function closeMessageMenu() {
+  document.querySelectorAll('.message-menu').forEach(node => node.remove());
+}
+
+function openMessageMenu(message, x, y, bubbleRect = null) {
+  closeMessageMenu();
+  const menu = document.createElement('div');
+  menu.className = 'message-menu';
+  const items = [];
+  const plainText = (!message.kind || message.kind === 'text')
+    ? String(message.content || '')
+    : String(message.content || '').trim();
+  if (plainText) {
+    items.push(['复制', '<path d="M9 9h10v10H9z"/><path d="M15 9V5H5v10h4"/>', async () => {
+      try {
+        await navigator.clipboard.writeText(plainText);
+        showMessage('已复制');
+      } catch (_) {
+        showError('复制失败，剪贴板不可用');
+      }
+    }]);
+  }
+  items.push(['收藏', '<path d="M12 4.5 14.3 9l5 .7-3.6 3.5.9 5-4.6-2.4L7.4 18l.9-5L4.7 9.7l5-.7z"/>', () => favoriteMessages([message])]);
+  if (plainText) {
+    items.push(['引用', '<path d="M7 7h4v6H9a2 2 0 0 1-2-2zM15 7h4v6h-2a2 2 0 0 1-2-2z"/>', () => {
+      state.quote = { id: message.id, role: message.role, text: plainText.slice(0, 200) };
+      renderConversation();
+    }]);
+  }
+  items.push(['多选', '<path d="m5 12 4 4L19 6"/><path d="M4 19h16"/>', () => {
+    state.selectMode = true;
+    state.selected = new Set([message.id]);
+    renderConversation();
+  }]);
+  items.push(['删除', '<path d="M4 7h16M9 7V5h6v2"/><path d="M7 7v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7"/>', () => deleteSingleMessage(message), 'danger']);
+
+  items.forEach(([label, icon, onPick, variant]) => {
+    const item = button('', `message-menu-item${variant === 'danger' ? ' danger' : ''}`);
+    item.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg><span>${label}</span>`;
+    item.addEventListener('click', event => {
+      event.stopPropagation();
+      closeMessageMenu();
+      onPick();
+    });
+    menu.append(item);
+  });
+  // 先挂上再量尺寸：菜单不压住被点的气泡，也不越出聊天区左右边界。
+  menu.style.visibility = 'hidden';
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect();
+  const stream = $('#message-stream')?.getBoundingClientRect();
+  const minLeft = Math.max(8, (stream?.left ?? 0) + 4);
+  const maxLeft = Math.min(window.innerWidth - box.width - 8, (stream?.right ?? window.innerWidth) - box.width - 4);
+  const left = Math.min(Math.max(minLeft, x - box.width / 2), Math.max(minLeft, maxLeft));
+  // 默认放在气泡上方，贴着它；上方不够再放到下方。
+  const anchor = bubbleRect || { top: y, bottom: y };
+  let top = anchor.top - box.height - 8;
+  if (top < 8) top = Math.min(anchor.bottom + 8, window.innerHeight - box.height - 8);
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(Math.max(8, top))}px`;
+  menu.style.visibility = '';
+}
+
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('.message-menu')) closeMessageMenu();
+}, true);
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeMessageMenu();
+});
+
+async function deleteSingleMessage(message) {
+  if (!state.currentConversation || !message?.id) return;
+  try {
+    const updated = await window.desktop.agent.messageDelete(state.currentConversation.id, message.id);
+    state.currentConversation = updated;
+    await reloadConversations();
+    renderConversation();
+    showMessage('已删除这条消息');
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function favoriteMessages(messages) {
@@ -891,19 +992,13 @@ function renderConversation() {
       });
       tools.append(favorite, cancel);
     } else {
-      const pick = button('多选收藏', 'button button-quiet button-small');
-      pick.disabled = !(state.currentConversation.messages || []).length;
-      pick.addEventListener('click', () => {
-        state.selectMode = true;
-        state.selected.clear();
-        renderConversation();
-      });
+      // 收藏、复制、引用都收进气泡菜单里，这里不再放多选按钮。
       const edit = button('联系人设置', 'button button-quiet button-small');
       edit.addEventListener('click', () => openConversationEditor(state.currentConversation));
       const clearCurrent = button('清空记录', 'button button-quiet button-small');
       clearCurrent.disabled = !(state.currentConversation.messages || []).length;
       clearCurrent.addEventListener('click', () => openClearConfirm(state.currentConversation));
-      tools.append(pick, edit, clearCurrent);
+      tools.append(edit, clearCurrent);
     }
   }
   toolbar.append(identity, tools);
@@ -980,6 +1075,24 @@ function renderConversation() {
 
   const inputRow = document.createElement('div');
   inputRow.className = 'compose-row';
+  let quoteBar = null;
+  // 引用栏：选了「引用」后显示在输入框上方，发送时并进这一条。
+  if (state.quote) {
+    const quote = document.createElement('div');
+    quote.className = 'compose-quote';
+    const text = document.createElement('div');
+    text.className = 'compose-quote-text';
+    text.textContent = `${state.quote.role === 'user' ? '我' : '对方'}：${state.quote.text}`;
+    const drop = button('', 'compose-quote-close');
+    drop.title = '取消引用';
+    drop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    drop.addEventListener('click', () => {
+      state.quote = null;
+      renderConversation();
+    });
+    quote.append(text, drop);
+    quoteBar = quote;
+  }
   const input = document.createElement('textarea');
   input.disabled = disabled;
   input.placeholder = state.currentConversation ? '说点什么，Enter 发送，Shift+Enter 换行' : '先在左侧选一个联系人';
@@ -1022,7 +1135,9 @@ function renderConversation() {
   send.type = 'submit';
   send.disabled = disabled;
   inputRow.append(input, send);
-  form.append(actionsBar, inputRow);
+  form.append(actionsBar);
+  if (quoteBar) form.append(quoteBar);
+  form.append(inputRow);
   form.addEventListener('submit', event => {
     event.preventDefault();
     const value = input.value;
@@ -1461,6 +1576,11 @@ async function sendMessage(text, message = null) {
   const value = String(text || '').trim();
   if (!value && !message) return;
   if (state.agentBusy) return;
+  // 引用会作为一段前缀并进这条消息，和微信「引用并回复」的效果一致。
+  const quote = state.quote;
+  const quoted = quote && value
+    ? `> ${quote.role === 'user' ? '我' : '对方'}：${quote.text.replace(/\n/g, ' ')}\n\n${value}`
+    : value;
   try {
     if (!state.currentConversation) {
       const created = await window.desktop.agent.conversationNew('新对话');
@@ -1472,13 +1592,14 @@ async function sendMessage(text, message = null) {
       ...state.currentConversation,
       messages: [
         ...(state.currentConversation.messages || []),
-        message ? { ...message, role: 'user', id: `pending-${Date.now()}` } : { role: 'user', kind: 'text', content: value, id: `pending-${Date.now()}` },
+        message ? { ...message, role: 'user', id: `pending-${Date.now()}` } : { role: 'user', kind: 'text', content: quoted, id: `pending-${Date.now()}` },
       ],
     };
     state.agentBusy = true;
     state.streamingText = '';
     renderConversation();
-    const result = await window.desktop.agent.chatStart(conversationId, value, message || undefined);
+    state.quote = null;
+    const result = await window.desktop.agent.chatStart(conversationId, quoted, message || undefined);
     state.agentTicketId = result.ticketId;
     try {
       const saved = await window.desktop.agent.conversationLoad(conversationId);
@@ -2237,6 +2358,10 @@ async function renderSettings() {
       await window.desktop.app.settings.save({ aiVoiceReply: checked });
       state.aiVoiceReply = checked;
     }),
+    prefRow('让 AI 看图片', '开启后发出的图片会一起交给模型，需要模型支持视觉输入（如 gpt-4o）；不支持时会提示换模型', state.visionEnabled, async checked => {
+      await window.desktop.app.settings.save({ visionEnabled: checked });
+      state.visionEnabled = checked;
+    }),
   );
   callCard.append(callPrefs);
   // 通话里的访问令牌、听写与打断设置都收在这里，通话界面不再出现设置入口。
@@ -2706,6 +2831,7 @@ async function bootstrapUi() {
       waveform: settings?.waveform !== false,
     };
     state.aiVoiceReply = settings?.aiVoiceReply === true;
+    state.visionEnabled = settings?.visionEnabled === true;
     state.chatBackground = settings?.chatBackground || '';
     state.callBackground = settings?.callBackground || '';
     if (settings?.toneId) state.activeToneId = settings.toneId;

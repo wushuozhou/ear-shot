@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld('desktop', {
       if (typeof id !== 'string') throw new TypeError('会话 id 必须是字符串');
       return ipcRenderer.invoke('agent:conversation-delete', id);
     },
+    messageDelete: (id, messageId) => {
+      if (typeof id !== 'string' || typeof messageId !== 'string') throw new TypeError('消息参数无效');
+      return ipcRenderer.invoke('agent:message-delete', { id, messageId });
+    },
     conversationClear: id => {
       if (typeof id !== 'string') throw new TypeError('会话 id 必须是字符串');
       return ipcRenderer.invoke('agent:conversation-clear', id);

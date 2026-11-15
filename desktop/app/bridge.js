@@ -31,6 +31,7 @@
     waveform: true,
     toneId: 'gentle',
     aiVoiceReply: false,
+    visionEnabled: false,
     chatBackground: '',
     callBackground: '',
     favorites: [],
@@ -50,6 +51,7 @@
     waveform: memory.waveform,
     toneId: memory.toneId,
     aiVoiceReply: memory.aiVoiceReply,
+    visionEnabled: memory.visionEnabled,
     chatBackground: memory.chatBackground,
     callBackground: memory.callBackground,
   });
@@ -106,6 +108,7 @@
       conversationLoad: async id => memory.conversations.find(item => item.id === id) || memory.conversations[0],
       conversationNew: async title => { const item = { id: `mock-${Date.now()}`, title: title || '新对话', settings: { number: '', avatar: '', model: '', toneId: '', style: '' }, messages: [] }; memory.conversations.unshift(item); return item; },
       conversationDelete: async id => { memory.conversations = memory.conversations.filter(item => item.id !== id); return { ok: true }; },
+      messageDelete: async (id, mid) => { const it = memory.conversations.find(r => r.id === id); if (it) it.messages = it.messages.filter(m => m.id !== mid); return it; },
       conversationClear: async id => { const item = memory.conversations.find(row => row.id === id); if (item) item.messages = []; return item; },
       conversationClearAll: async () => { memory.conversations.forEach(item => { item.messages = []; }); return { cleared: memory.conversations.length }; },
       conversationRename: async input => { const item = memory.conversations.find(row => row.id === input.id); if (item) item.title = input.title; return item; },

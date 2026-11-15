@@ -16,6 +16,7 @@ const {
   normalizeMessages,
   recallMemories,
   storeMemory,
+  streamChat,
 } = require('./agent.cjs');
 
 test('SSE parser handles split chunks, multiple events, and DONE', () => {
@@ -265,4 +266,68 @@ test('call log records direction, duration and keeps newest first', () => {
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('vision messages reach the provider and unsupported models get an actionable error', async () => {
+  const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const fake = (captured, ok = true, status = 200) => async (url, options) => {
+    captured.body = JSON.parse(options.body);
+    if (!ok) return { ok: false, status };
+    return { ok: true, body: (async function* () { yield Buffer.from('data: [DONE]\n\n'); })() };
+  };
+
+  // 图片以 OpenAI vision 的分段格式原样发给模型。
+  const captured = {};
+  await streamChat({
+    provider: { baseUrl: 'https://x/v1', model: 'gpt-4o', apiKey: 'k' },
+    messages: [{ role: 'user', content: [{ type: 'text', text: '这是什么' }, { type: 'image_url', image_url: { url: tiny } }] }],
+    fetchImpl: fake(captured),
+  });
+  assert.equal(captured.body.messages[0].content[1].image_url.url, tiny);
+
+  // 带图片的 400 要提示换支持视觉的模型，而不是笼统报错。
+  let withImage = '';
+  await streamChat({
+    provider: { baseUrl: 'https://x/v1', model: 'no-vision', apiKey: 'k' },
+    messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: tiny } }] }],
+    onError: message => { withImage = message; },
+    fetchImpl: fake({}, false, 400),
+  });
+  assert.match(withImage, /不支持图片输入/);
+
+  // 没带图片的 400 不能误报成视觉问题。
+  let plain = '';
+  await streamChat({
+    provider: { baseUrl: 'https://x/v1', model: 'm', apiKey: 'k' },
+    messages: [{ role: 'user', content: 'hi' }],
+    onError: message => { plain = message; },
+    fetchImpl: fake({}, false, 400),
+  });
+  assert.ok(!/不支持图片输入/.test(plain));
+});
+
+test('removeMessage drops one message and keeps the rest', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'earshot-msg-'));
+  try {
+    const store = new ConversationStore(directory);
+    const created = store.create('小满');
+    store.append(created.id, { role: 'user', content: '第一句' });
+    store.append(created.id, { role: 'assistant', content: '第二句' });
+    store.append(created.id, { role: 'user', content: '第三句' });
+    const all = store.load(created.id).messages;
+    assert.equal(all.length, 3);
+    const after = store.removeMessage(created.id, all[1].id);
+    assert.deepEqual(after.messages.map(item => item.content), ['第一句', '第三句']);
+    // 删不存在的 id 不应改动记录。
+    assert.equal(store.removeMessage(created.id, 'no-such-id').messages.length, 2);
+    assert.equal(store.list()[0].messageCount, 2);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('list preview hides the quote prefix and keeps the reply body', () => {
+  const quoted = [{ role: 'user', kind: 'text', content: '> 对方：好啊，七点老地方见\n\n引用回复一下' }];
+  assert.equal(conversationPreview(quoted), '我：引用回复一下');
+  assert.equal(conversationPreview([{ role: 'assistant', kind: 'text', content: '普通一句话' }]), '普通一句话');
 });

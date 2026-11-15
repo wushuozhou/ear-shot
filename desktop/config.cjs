@@ -36,6 +36,7 @@ const DEFAULT_CONFIG = {
   phoneStyle: true,
   waveform: true,
   aiVoiceReply: false,
+  visionEnabled: false,
   chatBackground: '',
   callBackground: '',
 };
