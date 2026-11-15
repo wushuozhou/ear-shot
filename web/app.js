@@ -569,6 +569,17 @@ function sendTyped() {
 }
 
 $('#keyboard').addEventListener('click', () => setChat($('#chat').hidden));
+// 通话里粘贴图片/视频：通话链路只传文字和声音，这里明确提示去聊天页发，不静默吞掉。
+$('#chat-input').addEventListener('paste', event => {
+  const items = [...(event.clipboardData?.items || [])];
+  if (!items.some(item => item.kind === 'file' && /^(image|video)\//.test(item.type))) return;
+  event.preventDefault();
+  const hint = $('#hint');
+  if (hint) {
+    hint.textContent = '通话中只能说话或打字，图片和视频请到聊天里发送';
+    setTimeout(() => { if (hint.textContent.startsWith('通话中只能')) hint.textContent = ''; }, 4000);
+  }
+});
 $('#chat-send').addEventListener('click', sendTyped);
 $('#chat-input').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

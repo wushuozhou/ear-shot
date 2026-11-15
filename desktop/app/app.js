@@ -748,6 +748,8 @@ async function favoriteMessages(messages) {
       title: state.currentConversation?.title || '',
       messages: list,
     });
+    // 收藏页读的是内存里的 state.favorites，写盘后必须回读，否则切过去看不到新收藏。
+    state.favorites = await window.desktop.favorites.list();
     state.selectMode = false;
     state.selected.clear();
     renderConversation();
@@ -932,20 +934,6 @@ function renderConversation() {
   micButton.disabled = disabled;
   micButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
   micButton.addEventListener('click', () => toggleRecording());
-  const mediaInput = document.createElement('input');
-  mediaInput.type = 'file';
-  mediaInput.accept = 'image/*,video/*';
-  mediaInput.hidden = true;
-  mediaInput.addEventListener('change', () => {
-    const file = mediaInput.files?.[0];
-    mediaInput.value = '';
-    if (file) sendAttachment(file);
-  });
-  const mediaButton = button('', 'compose-icon');
-  mediaButton.title = '发送图片或视频';
-  mediaButton.disabled = disabled;
-  mediaButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 17 5-5 4 4 2-2 3 3"/></svg>';
-  mediaButton.addEventListener('click', () => mediaInput.click());
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.hidden = true;
@@ -979,7 +967,10 @@ function renderConversation() {
   const voiceLabel = document.createElement('span');
   voiceLabel.textContent = 'AI 语音';
   voiceToggle.append(voiceCheck, voiceLabel);
-  actionsBar.append(micButton, mediaButton, fileButton, mediaInput, fileInput, voiceToggle);
+  const pasteHint = document.createElement('span');
+  pasteHint.className = 'compose-hint';
+  pasteHint.textContent = '图片 / 视频直接粘贴或拖进来';
+  actionsBar.append(micButton, fileButton, fileInput, voiceToggle, pasteHint);
   if (state.recording) {
     const tip = document.createElement('span');
     tip.className = 'recording-tip';
@@ -999,6 +990,33 @@ function renderConversation() {
       event.preventDefault();
       form.requestSubmit();
     }
+  });
+  // 直接粘贴图片或视频就发出去，不用再点选择按钮。
+  input.addEventListener('paste', event => {
+    const items = [...(event.clipboardData?.items || [])];
+    const media = items.find(item => item.kind === 'file' && /^(image|video)\//.test(item.type));
+    if (!media) return;
+    const file = media.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    sendAttachment(file);
+  });
+  // 拖进来也当作发送。
+  const stopDefault = event => { event.preventDefault(); event.stopPropagation(); };
+  ['dragenter', 'dragover'].forEach(name => form.addEventListener(name, event => {
+    stopDefault(event);
+    form.classList.add('dropping');
+  }));
+  ['dragleave', 'dragend'].forEach(name => form.addEventListener(name, event => {
+    stopDefault(event);
+    if (name === 'dragleave' && form.contains(event.relatedTarget)) return;
+    form.classList.remove('dropping');
+  }));
+  form.addEventListener('drop', event => {
+    stopDefault(event);
+    form.classList.remove('dropping');
+    const file = event.dataTransfer?.files?.[0];
+    if (file) sendAttachment(file);
   });
   const send = button('发送', 'button');
   send.type = 'submit';
@@ -2640,6 +2658,29 @@ function renderRoute() {
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
 document.documentElement.dataset.theme = 'mono-light';
+
+// 侧边栏收起/展开，状态记在本地，下次打开保持。
+const SIDEBAR_KEY = 'earshot:sidebar-collapsed';
+function applySidebarCollapsed(collapsed) {
+  const shell = document.querySelector('.shell');
+  const toggle = $('#sidebar-toggle');
+  if (shell) shell.classList.toggle('sidebar-collapsed', collapsed);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.title = collapsed ? '展开侧边栏' : '收起侧边栏';
+    toggle.setAttribute('aria-label', toggle.title);
+  }
+  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : ''); } catch (_) { /* 存不下不影响使用 */ }
+}
+
+(() => {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(SIDEBAR_KEY) === '1'; } catch (_) { collapsed = false; }
+  applySidebarCollapsed(collapsed);
+  $('#sidebar-toggle')?.addEventListener('click', () => {
+    applySidebarCollapsed(!document.querySelector('.shell')?.classList.contains('sidebar-collapsed'));
+  });
+})();
 
 $('#open-logs')?.addEventListener('click', () => window.desktop.app.openPath('logs'));
 window.addEventListener('hashchange', renderRoute);
