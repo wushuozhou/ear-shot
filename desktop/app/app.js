@@ -27,10 +27,16 @@ const state = {
   visionEnabled: false,
   chatBackground: '',
   callBackground: '',
+  callBackdropHue: '',
+  fluidCursor: true,
+  themeHue: '',
+  appBackground: '',
   favorites: [],
   callLog: [],
   callTab: 'recents',
   dialNumber: '',
+  // 切换联系人时置 true，由 renderConversationMessages 消费一次，播放气泡依次落位。
+  enterAnimation: false,
 };
 
 const ACTIVE_CONVERSATION_KEY = 'earshot:active-conversation';
@@ -71,6 +77,7 @@ async function selectConversation(id) {
   state.agentTicketId = '';
   state.streamingText = '';
   state.draft = '';
+  state.enterAnimation = true;
   rememberActiveConversation(conversation.id);
   return conversation;
 }
@@ -746,8 +753,32 @@ function renderConversationMessages() {
       : '<div><strong>还没有联系人</strong>点击左侧「新建」创建一个联系人后开始聊天。</div>';
     stream.append(empty);
   } else {
-    messages.forEach(message => stream.append(rowFor(message)));
+    const rows = messages.map(message => rowFor(message));
+    rows.forEach(row => stream.append(row));
     if (state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
+    // 切换联系人时按时间轴依次落位：每枚 0.5s、间隔 180ms，总时长收在 1.6s 内，
+    // 先出现的降到 0.6 不透明度退为背景层，最新一枚保持 1.0。
+    if (state.enterAnimation && rows.length) {
+      state.enterAnimation = false;
+      const tail = rows.slice(-6);
+      const gap = Math.min(180, 1100 / Math.max(1, tail.length));
+      rows.slice(0, rows.length - tail.length).forEach(row => row.classList.add('msg-settled'));
+      tail.forEach(row => row.classList.add('msg-enter'));
+      // 强制一次样式计算把起始态落定，再调度落位。
+      // 不用 requestAnimationFrame：窗口在后台时 rAF 会被节流，动画会迟迟不启动甚至看起来卡住。
+      void stream.offsetHeight;
+      tail.forEach((row, index) => {
+        const last = index === tail.length - 1;
+        setTimeout(() => {
+          row.classList.add('msg-in');
+          // 入场结束后撤掉 will-change，避免长期占着合成层
+          setTimeout(() => {
+            row.classList.remove('msg-enter');
+            if (!last) row.classList.add('msg-settled');
+          }, 500);
+        }, index * gap);
+      });
+    }
   }
   stream.scrollTop = stream.scrollHeight;
 }
@@ -1938,6 +1969,8 @@ function openCallView(shell, item) {
     tone: settings.tone || '',
     wave: state.chat.waveform !== false,
     background: state.callBackground || '',
+    backdropHue: state.callBackdropHue ?? '',
+    fluidCursor: state.fluidCursor !== false,
   };
   const startedAt = Date.now();
   shell.replaceChildren();
@@ -2082,8 +2115,165 @@ function renderFavorites() {
   });
 }
 
-// 背景选择：纯色预设 + 自定义图片，通话背景默认纯黑。
-function backgroundPicker(label, current, onChange) {
+// 色环：默认收起，点「自定义」展开。
+// 弹层以触发按钮为 transform-origin（锚定到来源），消失也回到同一路径。
+// 1:1 跟手（Pointer Events + setPointerCapture），松手即落定，不等 click。
+function hueRing(current, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'hue-ring-field';
+  const bar = document.createElement('div');
+  bar.className = 'hue-ring-bar';
+  // 收起态只显示当前色与一个入口
+  const chip = document.createElement('span');
+  chip.className = 'hue-chip';
+  const readout = document.createElement('span');
+  readout.className = 'hue-readout';
+  const toggle = button('自定义', 'button button-quiet button-small');
+  toggle.setAttribute('aria-expanded', 'false');
+  const panel = document.createElement('div');
+  panel.className = 'hue-panel';
+  panel.hidden = true;
+
+  const ring = document.createElement('div');
+  ring.className = 'hue-ring';
+  ring.setAttribute('role', 'slider');
+  ring.setAttribute('aria-label', '色相');
+  ring.setAttribute('aria-valuemin', '0');
+  ring.setAttribute('aria-valuemax', '360');
+  ring.tabIndex = 0;
+  const knob = document.createElement('span');
+  knob.className = 'hue-knob';
+  ring.append(knob);
+
+  let hue = current === '' || current === null || current === undefined ? null : Number(current);
+  const paint = () => {
+    const shown = hue === null ? 210 : hue;
+    const angle = (shown - 90) * Math.PI / 180;
+    knob.style.left = `${50 + Math.cos(angle) * 38}%`;
+    knob.style.top = `${50 + Math.sin(angle) * 38}%`;
+    knob.style.background = `hsl(${shown} 70% 55%)`;
+    ring.setAttribute('aria-valuenow', String(shown));
+    ring.setAttribute('aria-valuetext', hue === null ? '跟随主题' : `${shown} 度`);
+    readout.textContent = hue === null ? '跟随主题' : `${shown}°`;
+    chip.style.background = hue === null ? 'var(--panel-2)' : `hsl(${shown} 70% 55%)`;
+    chip.textContent = hue === null ? '默认' : '';
+  };
+  paint();
+
+  const hueAt = event => {
+    const rect = ring.getBoundingClientRect();
+    const dx = event.clientX - (rect.left + rect.width / 2);
+    const dy = event.clientY - (rect.top + rect.height / 2);
+    return Math.round((Math.atan2(dy, dx) * 180 / Math.PI + 90 + 360) % 360);
+  };
+  let dragging = false;
+  // 按下即反馈，不等 release；拖动过程中连续更新预览，松手才落盘。
+  ring.addEventListener('pointerdown', event => {
+    dragging = true;
+    // 捕获失败不该影响取色（例如合成事件、无真实指针时）
+    try { ring.setPointerCapture(event.pointerId); } catch (_) { /* 继续按坐标取色 */ }
+    hue = hueAt(event);
+    paint();
+    onChange(hue, false);
+  });
+  ring.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    hue = hueAt(event);
+    paint();
+    onChange(hue, false);
+  });
+  const finish = () => {
+    if (!dragging) return;
+    dragging = false;
+    onChange(hue, true);
+  };
+  ring.addEventListener('pointerup', finish);
+  ring.addEventListener('pointercancel', finish);
+  // 键盘也能调色：方向键 ±1，Shift 加速
+  ring.addEventListener('keydown', event => {
+    const step = event.shiftKey ? 10 : 1;
+    let next = hue === null ? 210 : hue;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') next += step;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') next -= step;
+    else return;
+    event.preventDefault();
+    hue = ((next % 360) + 360) % 360;
+    paint();
+    onChange(hue, true);
+  });
+
+  const reset = button('跟随主题', 'button button-quiet button-small');
+  reset.addEventListener('click', () => { hue = null; paint(); onChange('', true); });
+  panel.append(ring, reset);
+
+  const setOpen = open => {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? '收起' : '自定义';
+    if (open) {
+      panel.hidden = false;
+      // 展开：从按钮一侧放大浮现，材质与位移一起动，读起来是"面板到场"
+      void panel.offsetHeight;
+      panel.classList.add('open');
+      ring.focus({ preventScroll: true });
+    } else {
+      panel.classList.remove('open');
+      // 收起沿同一路径退场，动画结束才移出布局
+      setTimeout(() => { if (!panel.classList.contains('open')) panel.hidden = true; }, 220);
+    }
+  };
+  toggle.addEventListener('click', () => setOpen(toggle.getAttribute('aria-expanded') !== 'true'));
+  // Esc 收起，焦点交还按钮，不把用户困在弹层里
+  panel.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    setOpen(false);
+    toggle.focus();
+  });
+
+  bar.append(chip, readout, toggle);
+  wrap.append(bar, panel);
+  return wrap;
+}
+
+// 主题强调色：用户色环只覆盖强调色档位，背景与文字档位保持主题原样，
+// 这样对比度不会被自定义颜色破坏。
+function applyThemeHue(hue) {
+  const root = document.documentElement;
+  if (hue === '' || hue === null || hue === undefined) {
+    root.style.removeProperty('--accent');
+    root.style.removeProperty('--focus');
+    root.style.removeProperty('--accent-text');
+    return;
+  }
+  const h = ((Number(hue) % 360) + 360) % 360;
+  const light = root.dataset.theme === 'mono-light';
+  root.style.setProperty('--accent', `hsl(${h} ${light ? 68 : 62}% ${light ? 42 : 56}%)`);
+  root.style.setProperty('--focus', `hsl(${h} ${light ? 72 : 66}% ${light ? 48 : 64}%)`);
+  // 强调色上的文字按亮度选黑白，保证可读
+  root.style.setProperty('--accent-text', light ? '#FFFFFF' : (h > 40 && h < 200 ? '#101418' : '#FFFFFF'));
+}
+
+// 应用背景图：铺在 body 底层，面板转为半透明材质（材质层次 = 层级）
+function applyAppBackground(value) {
+  const root = document.documentElement;
+  if (!value) {
+    document.body.style.backgroundImage = '';
+    root.classList.remove('has-app-background');
+    return;
+  }
+  if (value.startsWith('data:image/')) {
+    document.body.style.backgroundImage = `url("${value}")`;
+    root.classList.add('has-app-background');
+    return;
+  }
+  document.body.style.backgroundImage = '';
+  document.body.style.backgroundColor = value;
+  root.classList.remove('has-app-background');
+}
+
+// 背景选择：纯色预设 + 内置动效场景 + 自定义图片/视频/HTML，通话背景默认纯黑。
+function backgroundPicker(label, current, onChange, options = {}) {
+  const { scenes = false, media = false, html = false } = options;
   const wrap = document.createElement('div');
   wrap.className = 'background-field';
   const title = document.createElement('span');
@@ -2094,14 +2284,23 @@ function backgroundPicker(label, current, onChange) {
   const preview = document.createElement('span');
   preview.className = 'background-preview';
   const paint = value => {
+    preview.style.backgroundImage = '';
+    preview.style.background = '';
+    preview.textContent = '';
     if (value && value.startsWith('data:image/')) {
       preview.style.backgroundImage = `url("${value}")`;
-      preview.style.background = '';
       preview.style.backgroundSize = 'cover';
       preview.style.backgroundPosition = 'center';
-      preview.textContent = '';
+    } else if (value && value.startsWith('data:video/')) {
+      preview.style.background = '#101418';
+      preview.textContent = '视频';
+    } else if (value && value.startsWith('html:')) {
+      preview.style.background = '#101418';
+      preview.textContent = 'HTML';
+    } else if (value && value.startsWith('scene:')) {
+      preview.style.background = 'linear-gradient(135deg,#203D27,#496F85 55%,#C478DB)';
+      preview.textContent = '动效';
     } else {
-      preview.style.backgroundImage = '';
       preview.style.background = value || 'var(--bg)';
       preview.textContent = value ? '' : '默认';
     }
@@ -2129,25 +2328,60 @@ function backgroundPicker(label, current, onChange) {
   });
   const file = document.createElement('input');
   file.type = 'file';
-  file.accept = 'image/*';
+  file.accept = media ? 'image/*,video/*' : 'image/*';
   file.hidden = true;
   file.addEventListener('change', async () => {
-    const image = file.files?.[0];
+    const picked = file.files?.[0];
     file.value = '';
-    if (!image) return;
-    if (image.size > 4 * 1024 * 1024) {
-      showError('背景图片超过 4MB，请先压缩');
+    if (!picked) return;
+    const isVideo = picked.type.startsWith('video/');
+    const limit = isVideo ? 24 * 1024 * 1024 : 4 * 1024 * 1024;
+    if (picked.size > limit) {
+      showError(isVideo ? '背景视频超过 24MB，请先压缩' : '背景图片超过 4MB，请先压缩');
       return;
     }
     try {
-      apply(await readFileAsDataUrl(image));
+      apply(await readFileAsDataUrl(picked));
     } catch (error) {
       showError(error.message);
     }
   });
-  const upload = button('选图片…', 'button button-quiet button-small');
+  const upload = button(media ? '选图片 / 视频…' : '选图片…', 'button button-quiet button-small');
   upload.addEventListener('click', () => file.click());
   row.append(preview, swatches, upload, file);
+  if (scenes) {
+    const sceneRow = document.createElement('div');
+    sceneRow.className = 'background-scenes';
+    [['scene:particle-rain', '粒子雨'], ['scene:point-cloud', '点云倒影'], ['scene:aurora-fog', '体积光雾']].forEach(([value, name]) => {
+      const chip = button(name, `scene-chip${current === value ? ' active' : ''}`);
+      chip.addEventListener('click', () => apply(value));
+      sceneRow.append(chip);
+    });
+    row.append(sceneRow);
+  }
+  if (html) {
+    const htmlFile = document.createElement('input');
+    htmlFile.type = 'file';
+    htmlFile.accept = '.html,.htm,text/html';
+    htmlFile.hidden = true;
+    htmlFile.addEventListener('change', async () => {
+      const picked = htmlFile.files?.[0];
+      htmlFile.value = '';
+      if (!picked) return;
+      if (picked.size > 512 * 1024) {
+        showError('自定义 HTML 背景超过 512KB，请精简');
+        return;
+      }
+      try {
+        apply('html:' + await picked.text());
+      } catch (error) {
+        showError(error.message);
+      }
+    });
+    const htmlBtn = button('选 HTML…', 'button button-quiet button-small');
+    htmlBtn.addEventListener('click', () => htmlFile.click());
+    row.append(htmlBtn, htmlFile);
+  }
   wrap.append(title, row);
   return wrap;
 }
@@ -2276,6 +2510,32 @@ async function renderSettings() {
     themeOptions.append(option);
   });
   appearance.append(themeOptions);
+  // 主题强调色：色环自定义，覆盖所选主题的 --accent / --focus
+  const themeHueField = document.createElement('div');
+  themeHueField.className = 'background-field';
+  const themeHueTitle = document.createElement('span');
+  themeHueTitle.className = 'background-title';
+  themeHueTitle.textContent = '主题强调色';
+  const themeHueNote = document.createElement('p');
+  themeHueNote.className = 'settings-note';
+  themeHueNote.textContent = '拖动色环换一个强调色，留空则用主题自带的颜色。';
+  let themeHueTimer = 0;
+  themeHueField.append(themeHueTitle, themeHueNote, hueRing(state.themeHue, (hue, commit) => {
+    state.themeHue = hue;
+    applyThemeHue(hue);
+    if (!commit) return;
+    clearTimeout(themeHueTimer);
+    themeHueTimer = setTimeout(() => {
+      window.desktop.app.settings.save({ themeHue: hue }).catch(error => showError(error.message));
+    }, 120);
+  }));
+  appearance.append(themeHueField);
+  // 应用背景图：铺在整个窗口底层，面板自动转为半透明材质
+  appearance.append(backgroundPicker('应用背景', state.appBackground, value => {
+    state.appBackground = value;
+    applyAppBackground(value);
+    return window.desktop.app.settings.save({ appBackground: value });
+  }));
   content.append(appearance);
 
   const avatarCard = document.createElement('section');
@@ -2382,7 +2642,7 @@ async function renderSettings() {
   backgroundCard.innerHTML = '<h2>背景</h2>';
   const backgroundNote = document.createElement('p');
   backgroundNote.className = 'settings-note';
-  backgroundNote.textContent = '可以给聊天和通话各挑一张背景图，通话背景默认是纯黑。';
+  backgroundNote.textContent = '聊天背景支持纯色与图片。通话背景还可以用内置动效场景，或自己的图片、视频、HTML 页面。';
   backgroundCard.append(backgroundNote);
   backgroundCard.append(
     backgroundPicker('聊天背景', state.chatBackground, value => {
@@ -2392,8 +2652,37 @@ async function renderSettings() {
     backgroundPicker('通话背景', state.callBackground, value => {
       state.callBackground = value;
       return window.desktop.app.settings.save({ callBackground: value });
-    }),
+    }, { scenes: true, media: true, html: true }),
   );
+  // 动效场景的调色环：只在选了内置场景时才有意义，所以给出说明而不是隐藏控件。
+  const hueField = document.createElement('div');
+  hueField.className = 'background-field';
+  const hueTitle = document.createElement('span');
+  hueTitle.className = 'background-title';
+  hueTitle.textContent = '动效配色';
+  const hueNote = document.createElement('p');
+  hueNote.className = 'settings-note';
+  hueNote.textContent = '拖动色环给内置动效场景换一套同色系配色，留空则用场景自带配色。';
+  let hueTimer = 0;
+  hueField.append(hueTitle, hueNote, hueRing(state.callBackdropHue, (hue, commit) => {
+    state.callBackdropHue = hue;
+    if (!commit) return;
+    clearTimeout(hueTimer);
+    hueTimer = setTimeout(() => {
+      window.desktop.app.settings.save({ callBackdropHue: hue }).catch(error => showError(error.message));
+    }, 120);
+  }));
+  backgroundCard.append(hueField);
+  // 流体光标扰动开关
+  backgroundCard.append(prefRow(
+    '流体光标扰动',
+    '鼠标掠过时把背景粒子柔和推开，停下后缓慢回流。',
+    state.fluidCursor !== false,
+    async next => {
+      state.fluidCursor = next;
+      await window.desktop.app.settings.save({ fluidCursor: next });
+    },
+  ));
   content.append(backgroundCard);
 
   // 供应商并入设置，这里只留一个入口。
@@ -2784,6 +3073,69 @@ function renderRoute() {
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
 document.documentElement.dataset.theme = 'mono-light';
 
+// 首屏遮罩：#090909 上白色粒子自下而上升起，中心向四周淡出，约 800ms 后整体淡出。
+(() => {
+  const veil = document.getElementById('boot-veil');
+  if (!veil) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { veil.remove(); return; }
+  const ctx = veil.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let w = window.innerWidth, h = window.innerHeight;
+  const size = () => {
+    w = window.innerWidth; h = window.innerHeight;
+    veil.width = Math.round(w * dpr);
+    veil.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  size();
+  const dots = [];
+  const count = Math.round((w * h) / 5200);
+  for (let i = 0; i < count; i++) {
+    dots.push({
+      x: Math.random() * w,
+      y: h + Math.random() * h * 0.55,
+      r: Math.random() * 1.5 + 0.3,
+      v: 42 + Math.random() * 135,
+      a: 0.25 + Math.random() * 0.75,
+      sway: (Math.random() - 0.5) * 20,
+      seed: Math.random() * 6.28,
+    });
+  }
+  const start = performance.now();
+  const HOLD = 800, FADE = 620;
+  let last = start;
+  const cx = w / 2, cy = h / 2;
+  const maxD = Math.hypot(cx, cy);
+  const tick = now => {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const life = now - start;
+    const out = life <= HOLD ? 0 : Math.min(1, (life - HOLD) / FADE);
+    ctx.fillStyle = '#090909';
+    ctx.fillRect(0, 0, w, h);
+    ctx.save();
+    for (const d of dots) {
+      d.y -= d.v * dt;
+      d.x += Math.sin(now / 760 + d.seed) * d.sway * dt;
+      if (d.y < -8) { d.y = h + Math.random() * 40; d.x = Math.random() * w; }
+      // 中心最亮，向四周淡出
+      const dist = Math.hypot(d.x - cx, d.y - cy) / maxD;
+      const radial = Math.max(0, 1 - dist * 1.15);
+      ctx.globalAlpha = d.a * radial * (1 - out);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    if (out >= 1) { veil.remove(); window.removeEventListener('resize', size); return; }
+    veil.style.opacity = String(1 - out);
+    requestAnimationFrame(tick);
+  };
+  window.addEventListener('resize', size);
+  requestAnimationFrame(tick);
+})();
+
 // 侧边栏收起/展开，状态记在本地，下次打开保持。
 const SIDEBAR_KEY = 'earshot:sidebar-collapsed';
 function applySidebarCollapsed(collapsed) {
@@ -2834,6 +3186,12 @@ async function bootstrapUi() {
     state.visionEnabled = settings?.visionEnabled === true;
     state.chatBackground = settings?.chatBackground || '';
     state.callBackground = settings?.callBackground || '';
+    state.callBackdropHue = settings?.callBackdropHue ?? '';
+    state.fluidCursor = settings?.fluidCursor !== false;
+    state.themeHue = settings?.themeHue ?? '';
+    state.appBackground = settings?.appBackground || '';
+    applyThemeHue(state.themeHue);
+    applyAppBackground(state.appBackground);
     if (settings?.toneId) state.activeToneId = settings.toneId;
   } catch (_) {
     // 设置读不到时用默认值继续渲染。

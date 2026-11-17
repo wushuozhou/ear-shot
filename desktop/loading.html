@@ -1,81 +1,815 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Earshot 正在启动</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-      background: #111827;
-      color: #e5e7eb;
-    }
-    * { box-sizing: border-box; }
-    body {
-      min-height: 100vh;
-      margin: 0;
-      display: grid;
-      place-items: center;
-      background: radial-gradient(circle at top, #1f2937, #111827 62%);
-    }
-    main { width: min(680px, calc(100vw - 48px)); }
-    h1 { margin: 0 0 12px; font-size: 30px; font-weight: 600; }
-    p { color: #9ca3af; line-height: 1.7; }
-    .card {
-      padding: 32px;
-      border: 1px solid #374151;
-      border-radius: 16px;
-      background: rgba(17, 24, 39, .86);
-      box-shadow: 0 18px 60px rgba(0, 0, 0, .28);
-    }
-    .status { min-height: 56px; white-space: pre-wrap; }
-    .error { color: #fca5a5; }
-    button {
-      display: none;
-      padding: 10px 18px;
-      border: 0;
-      border-radius: 8px;
-      color: #111827;
-      background: #93c5fd;
-      cursor: pointer;
-      font-size: 15px;
-    }
-    button:hover { background: #bfdbfe; }
-    .meta { margin-top: 28px; font-size: 12px; color: #6b7280; word-break: break-all; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Earshot</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
+  body { font-family: "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif; color: #E8F0FF; }
+  #stage { position: fixed; inset: 0; display: block; }
+  /* 状态区压在画面之上，开场结束后才淡入，失败时始终可见 */
+  #ui {
+    position: fixed; left: 50%; bottom: 8vh; transform: translateX(-50%);
+    width: min(560px, calc(100vw - 64px)); text-align: center;
+    opacity: 0; transition: opacity .6s ease; pointer-events: none;
+  }
+  #ui.show { opacity: 1; pointer-events: auto; }
+  #status { margin: 0; min-height: 22px; color: rgba(232,240,255,.72); font-size: 13px; letter-spacing: .04em; }
+  #status.error { color: #FFB4A8; }
+  #retry {
+    display: none; margin-top: 14px; padding: 9px 22px; border: 1px solid rgba(232,240,255,.35);
+    border-radius: 999px; color: #E8F0FF; background: rgba(232,240,255,.08);
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  #retry:hover { background: rgba(232,240,255,.16); }
+  #logs { margin-top: 12px; color: rgba(232,240,255,.34); font-size: 11px; word-break: break-all; }
+  @media (prefers-reduced-motion: reduce) { #ui { transition: none; } }
+</style>
 </head>
 <body>
-  <main>
-    <section class="card">
-      <h1>Earshot</h1>
-      <p id="status" class="status">正在启动服务…</p>
-      <button id="retry" type="button">重试</button>
-      <div id="logs" class="meta"></div>
-    </section>
-  </main>
-  <script>
-    const status = document.getElementById('status');
-    const retry = document.getElementById('retry');
-    const logs = document.getElementById('logs');
+<canvas id="stage" aria-label="Earshot 启动动画"></canvas>
+<div id="ui">
+  <p id="status">正在启动服务…</p>
+  <button id="retry" type="button">重试</button>
+  <div id="logs"></div>
+</div>
+<script>
+'use strict';
+const TAU = Math.PI * 2;
+const stage = document.getElementById('stage');
+const ctx = stage.getContext('2d', { alpha: false });
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    function render(state) {
-      status.textContent = state.message || '正在启动服务…';
-      status.className = state.status === 'failed' ? 'status error' : 'status';
-      retry.style.display = state.status === 'failed' ? 'inline-block' : 'none';
-      logs.textContent = state.logPath ? `日志位置：${state.logPath}` : '';
+let W = 0, H = 0, DPR = 1;
+let frame = { x: 0, y: 0, w: 0, h: 0 };
+let painting = null;      // 预渲染的油画（铺满全屏，用于溢出画框）
+let cardShot = null;      // 中心卡片快照，供溶解转场逐像素剥离
+let cardField = null;     // 卡片的分形噪声场
+let cardImage = null;     // 复用的 ImageData，避免每帧分配
+
+// ── 值噪声 + fbm：云层、画布纹理、溶解遮罩都用它 ──
+const PERM = new Uint8Array(512);
+(() => {
+  let seed = 1337;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const base = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) base[i] = i;
+  for (let i = 255; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; const t = base[i]; base[i] = base[j]; base[j] = t; }
+  for (let i = 0; i < 512; i++) PERM[i] = base[i & 255];
+})();
+const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+const lerp = (a, b, t) => a + (b - a) * t;
+function hash2(ix, iy) { return PERM[(PERM[ix & 255] + (iy & 255)) & 255] / 255; }
+function valueNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = fade(x - ix), fy = fade(y - iy);
+  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+}
+function fbm(x, y, octaves = 4) {
+  let sum = 0, amp = 0.5, norm = 0;
+  for (let i = 0; i < octaves; i++) { sum += valueNoise(x, y) * amp; norm += amp; x *= 2.03; y *= 2.01; amp *= 0.5; }
+  return sum / norm;
+}
+const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+const easeInOutCubic = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const clamp01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
+const span = (t, a, b) => clamp01((t - a) / (b - a));
+
+// ── 星点：开场的细微闪烁 ──
+const stars = [];
+function buildStars() {
+  stars.length = 0;
+  const count = Math.round((W * H) / 14000);
+  for (let i = 0; i < count; i++) {
+    stars.push({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 0.9 + 0.25,
+      phase: Math.random() * TAU,
+      speed: 0.6 + Math.random() * 1.6,
+    });
+  }
+}
+
+// ── 文艺复兴式云与柏树油画：离屏预渲染一次，之后只做遮罩与缩放 ──
+function buildPainting() {
+  const c = document.createElement('canvas');
+  c.width = Math.max(640, Math.round(W * 0.7));
+  c.height = Math.max(480, Math.round(H * 0.7));
+  const g = c.getContext('2d');
+  const w = c.width, h = c.height;
+
+  // 天光：底部暖金，上部偏冷，模拟黄昏穹顶
+  const sky = g.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, '#1C2740');
+  sky.addColorStop(0.42, '#4A5A77');
+  sky.addColorStop(0.72, '#C8A571');
+  sky.addColorStop(1, '#E6C894');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, w, h);
+
+  // 云层：用 fbm 做体积感，亮部偏暖、暗部偏紫
+  const img = g.getImageData(0, 0, w, h);
+  const d = img.data;
+  const scale = 3.2 / w;
+  for (let y = 0; y < h; y++) {
+    const ny = y * scale * (w / h);
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const n = fbm(x * scale * 2.4, ny * 2.4, 5);
+      const band = clamp01((0.62 - y / h) * 1.9);
+      const cloud = clamp01((n - 0.46) * 2.6) * (0.35 + band * 0.75);
+      if (cloud <= 0) continue;
+      const warm = clamp01((y / h) * 1.2);
+      const lightR = lerp(214, 248, warm), lightG = lerp(206, 226, warm), lightB = lerp(226, 188, warm);
+      const shadeR = 92, shadeG = 86, shadeB = 112;
+      const shade = clamp01((n - 0.52) * 3.4);
+      const r = lerp(shadeR, lightR, shade), gg = lerp(shadeG, lightG, shade), b = lerp(shadeB, lightB, shade);
+      const a = cloud * 0.92;
+      d[i] = d[i] * (1 - a) + r * a;
+      d[i + 1] = d[i + 1] * (1 - a) + gg * a;
+      d[i + 2] = d[i + 2] * (1 - a) + b * a;
     }
+  }
+  g.putImageData(img, 0, 0);
 
-    retry.addEventListener('click', () => {
-      retry.disabled = true;
-      render({ status: 'starting', message: '正在重试启动服务…', logPath: logs.textContent.replace('日志位置：', '') });
-      window.desktop.retry().finally(() => { retry.disabled = false; });
-    });
+  // 远山与地平线
+  g.save();
+  g.globalAlpha = 0.5;
+  g.fillStyle = '#54506A';
+  g.beginPath();
+  g.moveTo(0, h * 0.74);
+  for (let x = 0; x <= w; x += 12) {
+    g.lineTo(x, h * 0.74 - fbm(x * 0.004, 7.3, 3) * h * 0.08);
+  }
+  g.lineTo(w, h); g.lineTo(0, h); g.closePath(); g.fill();
+  g.restore();
 
-    window.desktop.getStatus().then(render).catch(error => {
-      render({ status: 'failed', message: `启动页面无法读取状态：${error.message}` });
+  // 地面
+  const ground = g.createLinearGradient(0, h * 0.72, 0, h);
+  ground.addColorStop(0, '#5C5436');
+  ground.addColorStop(1, '#2C2A1E');
+  g.fillStyle = ground;
+  g.fillRect(0, h * 0.78, w, h * 0.22);
+
+  // 柏树：文艺复兴风景里的标志性垂直线条
+  const cypress = (cx, baseY, height, width, tone) => {
+    g.save();
+    const grd = g.createLinearGradient(cx - width, baseY - height, cx + width, baseY);
+    grd.addColorStop(0, tone[0]);
+    grd.addColorStop(1, tone[1]);
+    g.fillStyle = grd;
+    g.beginPath();
+    g.moveTo(cx, baseY - height);
+    for (let t = 0; t <= 1.0001; t += 0.05) {
+      const y = baseY - height * (1 - t);
+      const bulge = Math.sin(t * Math.PI) * 0.72 + t * 0.3;
+      g.lineTo(cx + width * bulge * (0.82 + fbm(t * 7, cx * 0.02, 2) * 0.4), y);
+    }
+    for (let t = 1; t >= -0.0001; t -= 0.05) {
+      const y = baseY - height * (1 - t);
+      const bulge = Math.sin(t * Math.PI) * 0.72 + t * 0.3;
+      g.lineTo(cx - width * bulge * (0.82 + fbm(t * 7 + 3, cx * 0.02, 2) * 0.4), y);
+    }
+    g.closePath();
+    g.fill();
+    g.restore();
+  };
+  cypress(w * 0.17, h * 0.95, h * 0.56, w * 0.035, ['#2B3B2A', '#16221A']);
+  cypress(w * 0.265, h * 0.97, h * 0.42, w * 0.028, ['#243520', '#121D15']);
+  cypress(w * 0.83, h * 0.96, h * 0.62, w * 0.038, ['#2E4030', '#16231A']);
+  cypress(w * 0.74, h * 0.98, h * 0.36, w * 0.025, ['#223119', '#101A12']);
+
+  // 油画感：画布纹理 + 暗角 + 上光
+  const tex = g.getImageData(0, 0, w, h);
+  const td = tex.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const weave = (Math.sin(x * 1.7) + Math.sin(y * 1.9)) * 2.2 + (valueNoise(x * 0.5, y * 0.5) - 0.5) * 10;
+      td[i] = clamp01((td[i] + weave) / 255) * 255;
+      td[i + 1] = clamp01((td[i + 1] + weave) / 255) * 255;
+      td[i + 2] = clamp01((td[i + 2] + weave) / 255) * 255;
+    }
+  }
+  g.putImageData(tex, 0, 0);
+  const vig = g.createRadialGradient(w / 2, h * 0.46, Math.min(w, h) * 0.22, w / 2, h * 0.5, Math.max(w, h) * 0.72);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(8,6,12,.62)');
+  g.fillStyle = vig;
+  g.fillRect(0, 0, w, h);
+  return c;
+}
+
+// ── 两个古典飞行人物：剪影 + 飘带，速度不同 ──
+function drawFigure(g, x, y, scale, flip, alpha, tilt) {
+  g.save();
+  g.globalAlpha = alpha;
+  g.translate(x, y);
+  g.rotate(tilt);
+  g.scale(flip * scale, scale);
+  // 飘带
+  g.beginPath();
+  g.moveTo(-6, -2);
+  g.quadraticCurveTo(-42, -26, -86, -6);
+  g.quadraticCurveTo(-44, 4, -8, 10);
+  g.closePath();
+  g.fillStyle = 'rgba(226,206,168,.5)';
+  g.fill();
+  // 身体
+  g.fillStyle = 'rgba(244,232,206,.92)';
+  g.beginPath();
+  g.ellipse(0, -16, 5.4, 6.2, 0, 0, TAU);          // 头
+  g.fill();
+  g.beginPath();
+  g.moveTo(-5, -10);
+  g.quadraticCurveTo(-11, 8, -4, 24);
+  g.quadraticCurveTo(3, 30, 9, 20);
+  g.quadraticCurveTo(12, 2, 5, -10);
+  g.closePath();
+  g.fill();
+  // 手臂
+  g.strokeStyle = 'rgba(244,232,206,.88)';
+  g.lineWidth = 3.4;
+  g.lineCap = 'round';
+  g.beginPath(); g.moveTo(-3, -6); g.lineTo(-22, -16); g.stroke();
+  g.beginPath(); g.moveTo(4, -5); g.lineTo(20, 4); g.stroke();
+  // 翼
+  g.globalAlpha = alpha * 0.72;
+  g.fillStyle = 'rgba(236,228,214,.7)';
+  g.beginPath();
+  g.moveTo(2, -12);
+  g.quadraticCurveTo(34, -36, 52, -14);
+  g.quadraticCurveTo(28, -12, 6, -4);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
+// ── 开场 3s：描边 → 油画显影 → 人物飞入 → 标题与罗马数字 ──
+const ROMAN = [
+  ['I', '倾听'],
+  ['II', '回应'],
+  ['III', '记得'],
+];
+
+// ── 星光粒子 / 星芒闪烁 + 环境漂浮物 ──
+// S13：星点带十字星芒（只给最亮的几颗），另有一层缓慢漂浮的尘絮做空气感。
+// 参数克制：星芒长度 ≤7px、漂浮物 ≤28 颗、整体亮度压在文字对比之下。
+const motes = [];
+function buildMotes() {
+  motes.length = 0;
+  const count = Math.min(28, Math.round((W * H) / 52000));
+  for (let i = 0; i < count; i++) {
+    motes.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: 1.2 + Math.random() * 2.6,
+      vx: (Math.random() - 0.5) * 7,     // 极慢横向漂移
+      vy: -(2 + Math.random() * 7),      // 轻轻上浮
+      phase: Math.random() * TAU,
+      a: 0.08 + Math.random() * 0.14,
     });
-    window.desktop.onState(render);
-  </script>
+  }
+}
+
+// 十字星芒：给亮度靠前的星点加四向细光针，闪烁相位各自独立
+function drawStarburst(x, y, len, alpha, color) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(x - len, y); ctx.lineTo(x + len, y);
+  ctx.moveTo(x, y - len); ctx.lineTo(x, y + len);
+  ctx.stroke();
+  // 中心一点高光，让星芒有"核"
+  ctx.globalAlpha = Math.min(1, alpha * 1.6);
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, 0.9, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// 环境漂浮尘絮：柔边、低亮度，离开上边界即从底部回收
+function drawMotes(t, dt, alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  for (const m of motes) {
+    if (dt > 0) {
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      if (m.y < -8) { m.y = H + 8; m.x = Math.random() * W; }
+      if (m.x < -8) m.x = W + 8; else if (m.x > W + 8) m.x = -8;
+    }
+    const breathe = 0.6 + 0.4 * Math.sin(t * 0.9 + m.phase);
+    const glow = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 3);
+    glow.addColorStop(0, `rgba(226,240,255,${m.a * breathe * alpha})`);
+    glow.addColorStop(1, 'rgba(226,240,255,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 3, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawIntro(t, dt = 0) {
+  const introDt = dt;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  // 网格与透视圆：淡入到 20% 不透明度
+  const guide = span(t, 0.15, 1.0) * 0.2;
+  if (guide > 0) {
+    ctx.save();
+    ctx.globalAlpha = guide;
+    ctx.strokeStyle = '#9FB6D4';
+    ctx.lineWidth = 1;
+    const step = Math.max(48, Math.min(W, H) / 14);
+    ctx.beginPath();
+    for (let x = (W / 2) % step; x < W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = (H / 2) % step; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+    ctx.beginPath();
+    for (let i = 1; i <= 4; i++) {
+      const r = Math.min(W, H) * (0.12 + i * 0.11);
+      ctx.moveTo(W / 2 + r, H / 2);
+      ctx.arc(W / 2, H / 2, r, 0, TAU);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 星点闪烁 + 星芒：最亮的几颗带十字光针
+  const starA = span(t, 0.2, 1.0) * 0.2;
+  if (starA > 0) {
+    ctx.save();
+    for (const s of stars) {
+      const tw = 0.45 + 0.55 * Math.sin(t * 7 * s.speed + s.phase);
+      ctx.globalAlpha = starA * tw;
+      ctx.fillStyle = '#DCE8FF';
+      ctx.fillRect(s.x, s.y, s.r, s.r);
+    }
+    ctx.restore();
+    // 星芒只给大颗星，数量有限才显得是"闪了一下"而不是满屏十字
+    for (const s of stars) {
+      if (s.r < 0.95) continue;
+      const tw = 0.5 + 0.5 * Math.sin(t * 2.6 * s.speed + s.phase);
+      if (tw < 0.55) continue;
+      const len = 3 + (tw - 0.55) * 9;         // 最长约 7px
+      drawStarburst(s.x, s.y, len, starA * tw * 1.5, '#E8F2FF');
+    }
+  }
+
+  // 环境漂浮物：和星点同期淡入，承担"空气有厚度"的观感
+  drawMotes(t, introDt, span(t, 0.3, 1.4));
+
+  // 0–1.2s：1px 冷白线左→右、下折、再回来，合拢中央竖长方形
+  const draw = span(t, 0, 1.2);
+  const { x, y, w, h } = frame;
+  const perimeter = w * 2 + h * 2;
+  const progress = easeInOutCubic(draw) * perimeter;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(226,240,255,.95)';
+  ctx.lineWidth = 1;
+  ctx.shadowColor = 'rgba(180,214,255,.85)';
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  let tipX = x, tipY = y;
+  let left = progress;
+  // 上边
+  const seg1 = Math.min(left, w);
+  if (seg1 > 0) { ctx.moveTo(x, y); ctx.lineTo(x + seg1, y); tipX = x + seg1; tipY = y; left -= seg1; }
+  // 右边
+  if (left > 0) { const s = Math.min(left, h); ctx.moveTo(x + w, y); ctx.lineTo(x + w, y + s); tipX = x + w; tipY = y + s; left -= s; }
+  // 下边（右→左）
+  if (left > 0) { const s = Math.min(left, w); ctx.moveTo(x + w, y + h); ctx.lineTo(x + w - s, y + h); tipX = x + w - s; tipY = y + h; left -= s; }
+  // 左边（下→上）
+  if (left > 0) { const s = Math.min(left, h); ctx.moveTo(x, y + h); ctx.lineTo(x, y + h - s); tipX = x; tipY = y + h - s; left -= s; }
+  ctx.stroke();
+  ctx.restore();
+
+  // 笔尖必须可见
+  if (draw > 0 && draw < 1) {
+    ctx.save();
+    const glow = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, 16);
+    glow.addColorStop(0, 'rgba(255,255,255,.95)');
+    glow.addColorStop(0.35, 'rgba(190,222,255,.5)');
+    glow.addColorStop(1, 'rgba(160,200,255,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(tipX, tipY, 16, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.arc(tipX, tipY, 1.6, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  // 1.2–2.2s：油画以径向遮罩由内向外显影，并溢出画框铺满全屏
+  const reveal = span(t, 1.2, 2.2);
+  if (reveal > 0 && painting) {
+    const e = easeOutCubic(reveal);
+    const cx = x + w / 2, cy = y + h / 2;
+    const maxR = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy));
+    // 先画框内，再随进度溢出到整屏
+    const bleed = span(t, 1.75, 2.35);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, maxR * e, 0, TAU);
+    ctx.clip();
+    if (bleed < 1) {
+      ctx.save();
+      ctx.beginPath();
+      const ox = lerp(0, -x, bleed), oy = lerp(0, -y, bleed);
+      const ow = lerp(w, W, bleed), oh = lerp(h, H, bleed);
+      ctx.rect(x + ox, y + oy, ow, oh);
+      ctx.clip();
+      ctx.drawImage(painting, x + ox, y + oy, ow, oh);
+      ctx.restore();
+    } else {
+      ctx.drawImage(painting, 0, 0, W, H);
+    }
+    ctx.restore();
+    // 显影边缘的一圈微光
+    if (e < 1) {
+      ctx.save();
+      ctx.globalAlpha = 0.5 * (1 - e);
+      ctx.strokeStyle = 'rgba(255,240,214,.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, maxR * e, 0, TAU); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // 画框线保持可见，溢出后淡出
+  const frameAlpha = 1 - span(t, 2.0, 2.5) * 0.85;
+  ctx.save();
+  ctx.globalAlpha = frameAlpha;
+  ctx.strokeStyle = 'rgba(226,240,255,.55)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+
+  // 1.6–2.6s：两个人物从两侧飞入，速度不同
+  const f1 = span(t, 1.6, 2.5), f2 = span(t, 1.78, 2.7);
+  if (f1 > 0) {
+    const e = easeOutCubic(f1);
+    drawFigure(ctx, lerp(-W * 0.18, W * 0.3, e), lerp(H * 0.26, H * 0.4, e),
+      Math.min(W, H) / 420, 1, Math.min(1, f1 * 2.2), lerp(-0.42, -0.08, e));
+  }
+  if (f2 > 0) {
+    const e = easeOutCubic(f2);
+    drawFigure(ctx, lerp(W * 1.18, W * 0.71, e), lerp(H * 0.6, H * 0.52, e),
+      Math.min(W, H) / 520, -1, Math.min(1, f2 * 2.2), lerp(0.4, 0.06, e));
+  }
+
+  // 2.2–3.0s：超大标题与罗马数字索引逐行揭示
+  const titleT = span(t, 2.15, 2.75);
+  if (titleT > 0) {
+    ctx.save();
+    const size = Math.min(W * 0.17, H * 0.26);
+    ctx.font = `300 ${size}px "Times New Roman", Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ty = H * 0.44;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, ty - size * 0.72, W, size * 1.44 * easeOutCubic(titleT));
+    ctx.clip();
+    ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 24;
+    ctx.fillStyle = 'rgba(248,244,236,.96)';
+    ctx.fillText('EARSHOT', W / 2, ty);
+    ctx.restore();
+    ctx.restore();
+  }
+  ROMAN.forEach((item, i) => {
+    const rt = span(t, 2.45 + i * 0.16, 2.8 + i * 0.16);
+    if (rt <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = rt;
+    const base = Math.max(12, Math.min(W, H) * 0.019);
+    ctx.font = `400 ${base}px "Times New Roman", Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const y2 = H * 0.62 + i * base * 2.1;
+    ctx.fillStyle = 'rgba(236,230,218,.72)';
+    ctx.fillText(`${item[0]}  ·  ${item[1]}`, W / 2, y2 + (1 - easeOutCubic(rt)) * 10);
+    ctx.restore();
+  });
+}
+
+// ── 中心卡片：转场的主体 ──
+function buildCard() {
+  const cw = Math.round(Math.min(W * 0.46, 520));
+  const ch = Math.round(Math.min(H * 0.42, 300));
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const g = c.getContext('2d');
+  const r = 18;
+  g.beginPath();
+  g.moveTo(r, 0); g.arcTo(cw, 0, cw, ch, r); g.arcTo(cw, ch, 0, ch, r);
+  g.arcTo(0, ch, 0, 0, r); g.arcTo(0, 0, cw, 0, r); g.closePath();
+  const grd = g.createLinearGradient(0, 0, cw, ch);
+  grd.addColorStop(0, 'rgba(250,247,240,.97)');
+  grd.addColorStop(1, 'rgba(226,222,212,.94)');
+  g.fillStyle = grd;
+  g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 1; g.stroke();
+  g.fillStyle = '#1A1A1E';
+  g.textAlign = 'center';
+  g.font = `300 ${Math.round(ch * 0.2)}px "Times New Roman", Georgia, serif`;
+  g.fillText('EARSHOT', cw / 2, ch * 0.46);
+  g.font = `400 ${Math.round(ch * 0.072)}px "Microsoft YaHei", sans-serif`;
+  g.fillStyle = 'rgba(26,26,30,.6)';
+  g.fillText('听着呢', cw / 2, ch * 0.62);
+  g.fillText('正在准备你的对话', cw / 2, ch * 0.76);
+  return { canvas: c, x: Math.round((W - cw) / 2), y: Math.round((H - ch) / 2 - H * 0.04), w: cw, h: ch };
+}
+
+// 预计算卡片的噪声场与边缘距离，转场时只做阈值比较
+function buildCardField(card) {
+  const { w, h } = card;
+  const g = card.canvas.getContext('2d');
+  const src = g.getImageData(0, 0, w, h);
+  const field = new Float32Array(w * h);
+  const edge = new Float32Array(w * h);
+  const diag = w + h;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      // 分形噪声 + 从右上向左下推进的方向项
+      const n = fbm(x * 0.028, y * 0.028, 4);
+      const dir = ((w - x) + y) / diag;           // 右上=0，左下=1
+      field[i] = clamp01(dir * 0.68 + n * 0.32);
+      // 到边界的归一化距离：越靠边越早燃
+      const dx = Math.min(x, w - 1 - x), dy = Math.min(y, h - 1 - y);
+      edge[i] = clamp01(Math.min(dx, dy) / (Math.min(w, h) * 0.5));
+    }
+  }
+  return { src, field, edge, w, h };
+}
+
+const particles = [];
+function spawnParticles(card, f, threshold, prevThreshold) {
+  const { w, h, field, src } = f;
+  const stepX = Math.max(2, Math.round(w / 110));
+  const stepY = Math.max(2, Math.round(h / 70));
+  for (let y = 0; y < h; y += stepY) {
+    for (let x = 0; x < w; x += stepX) {
+      const i = y * w + x;
+      const v = field[i];
+      if (v <= prevThreshold || v > threshold) continue;    // 只取这一帧新剥离的
+      const si = i * 4;
+      if (src.data[si + 3] < 30) continue;
+      particles.push({
+        x: card.x + x, y: card.y + y,
+        vx: (Math.random() - 0.5) * 16,
+        vy: -28 - Math.random() * 46,
+        life: 0, ttl: 0.5 + Math.random() * 0.5,
+        size: 0.8 + Math.random() * 1.5,
+        r: src.data[si], g: src.data[si + 1], b: src.data[si + 2],
+        star: Math.random() < 0.035,
+        drift: (Math.random() - 0.5) * 24,
+      });
+    }
+  }
+}
+
+function drawParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life += dt;
+    if (p.life >= p.ttl) { particles.splice(i, 1); continue; }
+    const k = p.life / p.ttl;
+    p.x += (p.vx + Math.sin(p.life * 6) * p.drift) * dt;
+    p.y += p.vy * dt;
+    p.vy *= 0.985;
+    const a = (1 - k) * 0.95;
+    const blur = Math.min(7, p.life * 26);       // 运动模糊：沿轨迹拉成短线
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // RGB 色散：三通道各偏移一点点
+    const disp = 0.6 + k * 1.4;
+    ctx.globalAlpha = a * 0.55;
+    ctx.strokeStyle = `rgb(${p.r | 0},0,0)`;
+    ctx.lineWidth = p.size;
+    ctx.beginPath(); ctx.moveTo(p.x - disp, p.y + blur); ctx.lineTo(p.x - disp, p.y); ctx.stroke();
+    ctx.strokeStyle = `rgb(0,${p.g | 0},0)`;
+    ctx.beginPath(); ctx.moveTo(p.x, p.y + blur); ctx.lineTo(p.x, p.y); ctx.stroke();
+    ctx.strokeStyle = `rgb(0,0,${p.b | 0})`;
+    ctx.beginPath(); ctx.moveTo(p.x + disp, p.y + blur); ctx.lineTo(p.x + disp, p.y); ctx.stroke();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = `rgb(${p.r | 0},${p.g | 0},${p.b | 0})`;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    if (p.star) {                                 // 偶尔闪现的十字星芒
+      const s = 5 + Math.sin(p.life * 22) * 3;
+      ctx.globalAlpha = a * 0.9;
+      ctx.strokeStyle = 'rgba(255,250,235,.95)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x - s, p.y); ctx.lineTo(p.x + s, p.y);
+      ctx.moveTo(p.x, p.y - s); ctx.lineTo(p.x, p.y + s);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// 1.6s 溶解：0–0.3s 轮廓高光，0.3–1.2s 噪声阈值推进，新画面 0.4s 延迟显影
+function drawDissolve(t) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  // 新场景：从暗部起显影，延迟 0.4s
+  const incoming = span(t, 0.4, 1.6);
+  if (incoming > 0 && painting) {
+    ctx.save();
+    ctx.globalAlpha = easeInOutCubic(incoming) * 0.92;
+    ctx.drawImage(painting, 0, 0, W, H);
+    ctx.fillStyle = `rgba(0,0,0,${0.55 * (1 - incoming)})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+
+  const card = cardShot;
+  const f = cardField;
+  if (!card || !f) return;
+
+  // 旧画面降饱和 + 虚化 4px
+  const fade = span(t, 0.3, 1.2);
+  const sat = 1 - fade * 0.85;
+  const blur = fade * 4;
+  const threshold = clamp01(span(t, 0.3, 1.2));
+
+  // 逐像素剥离：noise < threshold 的部分消失
+  const out = cardImage;
+  const od = out.data, sd = f.src.data;
+  for (let i = 0, n = f.w * f.h; i < n; i++) {
+    const si = i * 4;
+    if (f.field[i] <= threshold) { od[si + 3] = 0; continue; }
+    const r = sd[si], g = sd[si + 1], b = sd[si + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    od[si] = lerp(lum, r, sat);
+    od[si + 1] = lerp(lum, g, sat);
+    od[si + 2] = lerp(lum, b, sat);
+    od[si + 3] = sd[si + 3];
+  }
+
+  const tmp = document.createElement('canvas');
+  tmp.width = f.w; tmp.height = f.h;
+  tmp.getContext('2d').putImageData(out, 0, 0);
+  ctx.save();
+  if (blur > 0.05) ctx.filter = `blur(${blur.toFixed(2)}px)`;
+  ctx.drawImage(tmp, card.x, card.y);
+  ctx.restore();
+
+  // 0–0.3s：沿轮廓亮起冷白偏暖金的高光边缘，0.3s 达峰值
+  const rim = t < 0.3 ? easeOutCubic(t / 0.3) : Math.max(0, 1 - span(t, 0.3, 0.95));
+  if (rim > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = rim;
+    const grd = ctx.createLinearGradient(card.x, card.y, card.x + card.w, card.y + card.h);
+    grd.addColorStop(0, 'rgba(226,244,255,.95)');
+    grd.addColorStop(0.55, 'rgba(255,236,196,.95)');
+    grd.addColorStop(1, 'rgba(255,214,150,.9)');
+    ctx.strokeStyle = grd;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(255,228,180,.9)';
+    ctx.shadowBlur = 18 * rim;
+    const r = 18;
+    ctx.beginPath();
+    ctx.moveTo(card.x + r, card.y);
+    ctx.arcTo(card.x + card.w, card.y, card.x + card.w, card.y + card.h, r);
+    ctx.arcTo(card.x + card.w, card.y + card.h, card.x, card.y + card.h, r);
+    ctx.arcTo(card.x, card.y + card.h, card.x, card.y, r);
+    ctx.arcTo(card.x, card.y, card.x + card.w, card.y, r);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+  return threshold;
+}
+
+// ── 主循环 ──
+const INTRO = 3.0, DISSOLVE = 1.6;
+let phase = 'intro';
+let clock = 0, last = 0, prevThreshold = 0;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  stage.width = Math.round(W * DPR);
+  stage.height = Math.round(H * DPR);
+  stage.style.width = `${W}px`;
+  stage.style.height = `${H}px`;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const fw = Math.min(W * 0.3, 360);
+  const fh = Math.min(H * 0.62, 560);
+  frame = { x: Math.round((W - fw) / 2), y: Math.round((H - fh) / 2), w: Math.round(fw), h: Math.round(fh) };
+  buildStars();
+  buildMotes();
+  painting = buildPainting();
+  cardShot = buildCard();
+  cardField = buildCardField(cardShot);
+  cardImage = ctx.createImageData(cardField.w, cardField.h);
+}
+
+function tick(now) {
+  if (!last) last = now;
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  clock += dt;
+
+  if (phase === 'intro') {
+    drawIntro(clock, dt);
+    if (clock >= INTRO) { phase = 'hold'; showUi(); }
+  } else if (phase === 'hold') {
+    drawIntro(INTRO, dt);
+  } else if (phase === 'dissolve') {
+    const th = drawDissolve(clock);
+    if (typeof th === 'number') {
+      if (th > prevThreshold) { spawnParticles(cardShot, cardField, th, prevThreshold); prevThreshold = th; }
+    }
+    drawParticles(dt);
+    if (clock >= DISSOLVE && particles.length === 0) {
+      phase = 'done';
+      window.__earshotTransitionDone = true;
+      if (pendingNavigate) pendingNavigate();
+      return;
+    }
+  } else {
+    // done：留在新场景上，等待主进程切页
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    if (painting) ctx.drawImage(painting, 0, 0, W, H);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ── 状态区 ──
+const statusEl = document.getElementById('status');
+const retryEl = document.getElementById('retry');
+const logsEl = document.getElementById('logs');
+const uiEl = document.getElementById('ui');
+let pendingNavigate = null;
+let failed = false;
+
+function showUi() { uiEl.classList.add('show'); }
+
+function render(state) {
+  statusEl.textContent = state.message || '正在启动服务…';
+  const isFailed = state.status === 'failed';
+  statusEl.className = isFailed ? 'error' : '';
+  retryEl.style.display = isFailed ? 'inline-block' : 'none';
+  logsEl.textContent = state.logPath ? `日志位置：${state.logPath}` : '';
+  if (isFailed) { failed = true; showUi(); }
+}
+
+retryEl.addEventListener('click', () => {
+  if (!window.desktop || typeof window.desktop.retry !== 'function') return;
+  retryEl.disabled = true;
+  render({ status: 'starting', message: '正在重试启动服务…', logPath: logsEl.textContent.replace('日志位置：', '') });
+  window.desktop.retry().finally(() => { retryEl.disabled = false; });
+});
+
+// 主进程准备好切页时，先播完 1.6s 溶解转场再真正跳转
+window.__earshotPlayTransition = () => new Promise(resolve => {
+  if (failed) { resolve(); return; }
+  if (phase === 'done') { resolve(); return; }
+  pendingNavigate = resolve;
+  if (phase !== 'dissolve') {
+    phase = 'dissolve';
+    clock = 0;
+    prevThreshold = 0;
+    particles.length = 0;
+    uiEl.classList.remove('show');
+  }
+  // 兜底：动画异常时不要卡住启动
+  setTimeout(resolve, 2600);
+});
+
+// 动画先起来：开场画面不依赖状态桥，桥缺失或报错都不该让首帧停在空白。
+addEventListener('resize', () => { resize(); });
+resize();
+if (reduced) {
+  // 降级：不做动画，直接给静态画面与状态
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  if (painting) ctx.drawImage(painting, 0, 0, W, H);
+  showUi();
+  window.__earshotTransitionDone = true;
+  window.__earshotPlayTransition = () => Promise.resolve();
+} else {
+  requestAnimationFrame(tick);
+}
+
+const bridge = window.desktop;
+if (bridge && typeof bridge.getStatus === 'function') {
+  bridge.getStatus().then(render).catch(error => {
+    render({ status: 'failed', message: `启动页面无法读取状态：${error.message}` });
+  });
+  if (typeof bridge.onState === 'function') bridge.onState(render);
+}
+</script>
 </body>
 </html>

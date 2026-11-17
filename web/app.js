@@ -10,6 +10,7 @@ import { joinSaid, isWait, mayBeWait, QUICK_PAUSE_MS, PATIENT_PAUSE_MS, PATIENT_
 import { InputGate } from './lib/gate.mjs';
 import { GRACE_MS, idlePlan, idleSound, askedToWait, isNight, byeLine } from './lib/idle.mjs';
 import { streamEvents } from './lib/sse.mjs';
+import { CallBackdrop } from './backdrop.js';
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -23,6 +24,79 @@ const AVATARS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'pr
 const CONTACT = { name: '', number: '', avatar: 'preset-1', model: '', style: '' };
 let SHOW_WAVE = true;
 let INFO = { name: 'Earshot', lang: 'zh', needsToken: false };
+// 通话背景：动效场景引擎 + 图片 / 视频 / HTML / 纯色四种自定义来源
+let backdrop = null;
+let BACKDROP_HUE = null;
+let FLUID_CURSOR = true;
+
+function backdropLayer() {
+  let layer = document.getElementById('backdrop-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'backdrop-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    document.body.prepend(layer);
+  }
+  return layer;
+}
+
+function clearBackdrop() {
+  backdrop?.destroy();
+  backdrop = null;
+  const layer = document.getElementById('backdrop-layer');
+  if (layer) layer.replaceChildren();
+  document.body.style.backgroundImage = '';
+  document.body.style.backgroundColor = '';
+  document.body.classList.remove('has-background', 'has-backdrop');
+}
+
+function applyCallBackground(value, detail = {}) {
+  clearBackdrop();
+  const raw = String(value || '');
+  if (!raw) return;
+  const layer = backdropLayer();
+  if (raw.startsWith('scene:')) {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'backdrop-canvas';
+    layer.append(canvas);
+    document.body.classList.add('has-backdrop');
+    backdrop = new CallBackdrop(canvas);
+    backdrop.setScene(raw.slice(6) || 'point-cloud');
+    if (BACKDROP_HUE !== null) backdrop.setHue(BACKDROP_HUE);
+    backdrop.setFluid(FLUID_CURSOR);
+    backdrop.mount();
+    return;
+  }
+  if (raw.startsWith('data:video/')) {
+    const video = document.createElement('video');
+    video.className = 'backdrop-media';
+    video.src = raw;
+    video.muted = true; video.loop = true; video.autoplay = true;
+    video.playsInline = true;
+    video.play().catch(() => {});
+    layer.append(video);
+    document.body.classList.add('has-backdrop');
+    return;
+  }
+  if (raw.startsWith('html:')) {
+    // 自定义 HTML 背景放在沙箱 iframe 里：允许脚本画动效，但禁用同源访问，
+    // 拿不到通话页的 DOM、token 与麦克风。
+    const frame = document.createElement('iframe');
+    frame.className = 'backdrop-media';
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.srcdoc = raw.slice(5);
+    layer.append(frame);
+    document.body.classList.add('has-backdrop');
+    return;
+  }
+  if (raw.startsWith('data:image/')) {
+    document.body.style.backgroundImage = `url("${raw}")`;
+    document.body.classList.add('has-background');
+    return;
+  }
+  document.body.style.backgroundColor = raw;
+}
 
 function stripStageDirections(value) {
   return String(value || '').replace(/\[[a-z][a-z ,'-]{0,40}\]\s?/gi, '');
@@ -53,22 +127,16 @@ function applyContact(detail) {
   if (typeof detail.model === 'string') CONTACT.model = detail.model;
   if (typeof detail.style === 'string') CONTACT.style = detail.style;
   if (typeof detail.wave === 'boolean') SHOW_WAVE = detail.wave;
-  // 自定义通话背景：图片用 data URL，纯色直接当颜色值；留空就是默认纯黑。
-  if (typeof detail.background === 'string') {
-    const value = detail.background;
-    if (value.startsWith('data:image/')) {
-      document.body.style.backgroundImage = `url("${value}")`;
-      document.body.style.backgroundColor = '';
-      document.body.classList.add('has-background');
-    } else if (value) {
-      document.body.style.backgroundImage = '';
-      document.body.style.backgroundColor = value;
-      document.body.classList.remove('has-background');
-    } else {
-      document.body.style.backgroundImage = '';
-      document.body.style.backgroundColor = '';
-      document.body.classList.remove('has-background');
-    }
+  // 自定义通话背景：支持 scene:<场景>（代码生成的动效背景）、图片/视频 data URL、
+  // html:<源码> 自定义页面，或纯色；留空就是默认纯黑。
+  if (typeof detail.background === 'string') applyCallBackground(detail.background, detail);
+  if (typeof detail.backdropHue === 'string' || typeof detail.backdropHue === 'number') {
+    BACKDROP_HUE = detail.backdropHue === '' ? null : Number(detail.backdropHue);
+    backdrop?.setHue(BACKDROP_HUE);
+  }
+  if (typeof detail.fluidCursor === 'boolean') {
+    FLUID_CURSOR = detail.fluidCursor;
+    backdrop?.setFluid(FLUID_CURSOR);
   }
   const label = CONTACT.name || INFO.name;
   document.querySelectorAll('.name').forEach(node => { node.textContent = label; });
@@ -539,6 +607,14 @@ $('#settings form').addEventListener('submit', () => { store.set('token', $('#to
 // 通话界面不再放设置入口，这些开关统一收在桌面端「设置 → 通话与聊天」里。
 $('#open-settings')?.addEventListener('click', openSettings);
 $('#call').addEventListener('click', startCall);
+// 桌面端已经在联系人列表里点过一次了，不需要再看一屏拨号页：
+// 收到联系人信息后直接起通话。注意麦克风授权必须发生在用户手势内，
+// 这里的手势就是桌面端那一次点击，所以仍走同一条 startCall 链路。
+window.addEventListener('earshot:contact', event => {
+  if (!event.detail || event.detail.autoStart === false) return;
+  if (document.body.classList.contains('in-call')) return;
+  startCall();
+}, { once: true });
 $('#hangup').addEventListener('click', () => call?.hangup());
 $('#mute').addEventListener('click', e => { const m = call?.toggleMute(); e.currentTarget.classList.toggle('on', !!m); e.currentTarget.setAttribute('aria-pressed', String(!!m)); });
 $('#wave').addEventListener('click', () => call?.interrupt('tap'));

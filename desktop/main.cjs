@@ -498,6 +498,15 @@ async function startService({ resetRestarts = false } = {}) {
     publish({ status: 'ready', message: `服务已启动，正在打开 Earshot（端口 ${servicePort}）…` });
     writeLog(`服务探活成功：http://127.0.0.1:${servicePort}/api/info`);
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // 先让启动页播完溶解转场再跳转，避免硬切；动画异常时兜底继续。
+      try {
+        await mainWindow.webContents.executeJavaScript(
+          'window.__earshotPlayTransition ? window.__earshotPlayTransition() : Promise.resolve()',
+          true,
+        );
+      } catch (_) {
+        // 转场失败不应阻塞启动。
+      }
       await mainWindow.loadFile(path.join(app.getAppPath(), 'app', 'index.html'));
     }
     if (selfTestMode) {
@@ -696,6 +705,10 @@ function registerIpc() {
     visionEnabled: config.visionEnabled === true,
     chatBackground: config.chatBackground || '',
     callBackground: config.callBackground || '',
+    callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
+    fluidCursor: config.fluidCursor !== false,
+    themeHue: config.themeHue === undefined ? '' : config.themeHue,
+    appBackground: config.appBackground || '',
     toneId: config.activeToneId || '',
     toneText: config.toneText || '',
   }));
@@ -710,16 +723,41 @@ function registerIpc() {
     if (typeof patch.waveform === 'boolean') next.waveform = patch.waveform;
     if (typeof patch.aiVoiceReply === 'boolean') next.aiVoiceReply = patch.aiVoiceReply;
     if (typeof patch.visionEnabled === 'boolean') next.visionEnabled = patch.visionEnabled;
-    for (const key of ['chatBackground', 'callBackground']) {
+    for (const key of ['chatBackground', 'callBackground', 'appBackground']) {
       if (patch[key] === undefined) continue;
       const value = String(patch[key] || '');
-      // 允许清空、预设名，或不超过 4MB 的图片 data URL。
-      if (value && !/^(?:preset-[a-z0-9-]{1,30}|#[0-9a-fA-F]{6}|data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+)$/.test(value)) {
+      // 允许清空、预设名、纯色、内置动效场景，或图片/视频 data URL；
+      // callBackground 另外允许 html: 自定义页面（渲染侧放进 sandbox iframe）。
+      const scene = /^scene:[a-z0-9-]{1,32}$/;
+      const media = /^data:(?:image\/[a-z+]+|video\/[a-z0-9.+-]+);base64,[A-Za-z0-9+/=]+$/;
+      const plain = /^(?:preset-[a-z0-9-]{1,30}|#[0-9a-fA-F]{6})$/;
+      const html = key === 'callBackground' && value.startsWith('html:');
+      if (value && !html && !scene.test(value) && !media.test(value) && !plain.test(value)) {
         throw new Error('背景格式无效');
       }
-      if (value.length > 4 * 1024 * 1024) throw new Error('背景图片过大，请换一张');
+      if (html && value.length > 512 * 1024) throw new Error('自定义 HTML 背景过大，请精简到 512KB 以内');
+      if (!html && value.length > 24 * 1024 * 1024) throw new Error('背景文件过大，请换一个');
       next[key] = value;
     }
+    if (patch.callBackdropHue !== undefined) {
+      const raw = patch.callBackdropHue;
+      if (raw === '' || raw === null) next.callBackdropHue = '';
+      else {
+        const hue = Number(raw);
+        if (!Number.isFinite(hue) || hue < 0 || hue > 360) throw new Error('色相需要是 0–360 的数值');
+        next.callBackdropHue = Math.round(hue);
+      }
+    }
+    if (patch.themeHue !== undefined) {
+      const raw = patch.themeHue;
+      if (raw === '' || raw === null) next.themeHue = '';
+      else {
+        const hue = Number(raw);
+        if (!Number.isFinite(hue) || hue < 0 || hue > 360) throw new Error('色相需要是 0–360 的数值');
+        next.themeHue = Math.round(hue);
+      }
+    }
+    if (typeof patch.fluidCursor === 'boolean') next.fluidCursor = patch.fluidCursor;
     if (patch.toneText !== undefined) {
       if (typeof patch.toneText !== 'string' || patch.toneText.length > 2000) throw new Error('全局语气需要是 2000 字以内的文本');
       next.toneText = patch.toneText;
@@ -738,6 +776,10 @@ function registerIpc() {
       visionEnabled: config.visionEnabled === true,
       chatBackground: config.chatBackground || '',
       callBackground: config.callBackground || '',
+      callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
+      fluidCursor: config.fluidCursor !== false,
+      themeHue: config.themeHue === undefined ? '' : config.themeHue,
+      appBackground: config.appBackground || '',
       toneId: config.activeToneId || '',
       toneText: config.toneText || '',
     };
