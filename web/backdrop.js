@@ -35,6 +35,9 @@ export class CallBackdrop {
     this.scene = 'point-cloud';
     this.hue = null;           // null = 用预设配色；数字 = 用户色环
     this.intensity = 1;
+    this.density = 1;          // 粒子密度倍率，设置页可调
+    this.pattern = '';         // 自绘图案（data URL），点云按其明暗分布取点
+    this.patternPoints = null; // 从图案采样出的归一化坐标与颜色
     this.fluidEnabled = true;
     this.reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.running = false;
@@ -64,7 +67,9 @@ export class CallBackdrop {
 
   get budget() {
     const scale = this.tier === 1 ? 0.25 : this.tier === 2 ? 0.55 : 1;
-    return { rain: Math.round(120 * scale), cloud: Math.round(4200 * scale) };
+    // density 为用户可调倍率（0.4–2.2），和设备档位相乘
+    const d = Math.max(0.2, Math.min(2.2, Number(this.density) || 1));
+    return { rain: Math.round(120 * scale * d), cloud: Math.round(4200 * scale * d) };
   }
 
   palette() {
@@ -94,6 +99,45 @@ export class CallBackdrop {
   }
 
   setHue(hue) { this.hue = hue === '' || hue === null ? null : Number(hue); this.build(); }
+  setDensity(value) {
+    this.density = Math.max(0.2, Math.min(2.2, Number(value) || 1));
+    this.build();
+  }
+  // 自绘图案：把用户画的笔迹采样成点云坐标。亮处（有笔迹）才落点，
+  // 这样点云会"长成"图案的形状，同时保留原有的起伏与流体扰动。
+  async setPattern(dataUrl) {
+    this.pattern = dataUrl || '';
+    if (!this.pattern) { this.patternPoints = null; this.build(); return; }
+    try {
+      const bitmap = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('图案无法解析'));
+        img.src = this.pattern;
+      });
+      const side = 128;
+      const off = document.createElement('canvas');
+      off.width = off.height = side;
+      const g = off.getContext('2d');
+      g.drawImage(bitmap, 0, 0, side, side);
+      const data = g.getImageData(0, 0, side, side).data;
+      const points = [];
+      for (let y = 0; y < side; y++) {
+        for (let x = 0; x < side; x++) {
+          const i = (y * side + x) * 4;
+          const alpha = data[i + 3] / 255;
+          const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
+          // 透明处跳过；有像素就按亮度决定取点概率
+          if (alpha < 0.12 || lum < 0.1) continue;
+          points.push({ nx: x / side * 2 - 1, ny: y / side, lum, r: data[i], g: data[i + 1], b: data[i + 2] });
+        }
+      }
+      this.patternPoints = points.length ? points : null;
+    } catch (_) {
+      this.patternPoints = null;
+    }
+    this.build();
+  }
   setFluid(on) {
     this.fluidEnabled = !!on;
     if (!on) { this.grid.vx?.fill(0); this.grid.vy?.fill(0); }
@@ -130,8 +174,24 @@ export class CallBackdrop {
       });
     }
     this.cloud = [];
+    const pts = this.patternPoints;
     for (let i = 0; i < cloud; i++) {
       const [r, g, b] = hexToRgb(colors[i % colors.length]);
+      if (pts && pts.length) {
+        // 自绘图案模式：按笔迹分布取点，颜色沿用图案本身但混入场景配色
+        const p = pts[(Math.random() * pts.length) | 0];
+        this.cloud.push({
+          bx: p.nx,
+          bz: 0.2 + (1 - p.ny) * 0.7,          // 图案上方的点推远一些，形成纵深
+          phase: Math.random() * Math.PI * 2,
+          amp: 0.012 + Math.random() * 0.02,   // 图案要认得出，起伏幅度收小
+          r: Math.round((p.r + r) / 2), g: Math.round((p.g + g) / 2), b: Math.round((p.b + b) / 2),
+          a: 0.35 + p.lum * 0.5,
+          ox: 0, oy: 0,
+          pinned: true,                        // 标记：锚定在图案上，不随正弦大幅起伏
+        });
+        continue;
+      }
       this.cloud.push({
         // 起伏地形：x/z 铺面，y 由正弦噪声给高度
         bx: Math.random() * 2 - 1,
@@ -258,13 +318,18 @@ export class CallBackdrop {
     const horizon = this.H * 0.62;             // 地平线压在下 1/3 偏上
     const camera = this.reduced ? 0.5 : (Math.sin(this.clock * 0.08) * 0.5 + 0.5); // 极慢推进
     ctx.save();
+    const pinned = !!(this.patternPoints && this.patternPoints.length);
     for (const p of this.cloud) {
       // 近大远小的伪透视
       const z = 0.12 + p.bz * 0.88;
       const persp = 1 / (0.35 + z * 1.5);
       const wave = Math.sin(this.clock * 0.35 + p.phase + p.bz * 4) * p.amp;
       const x = this.W * 0.5 + p.bx * this.W * 0.62 * persp;
-      const y = horizon - (wave + 0.08) * this.H * persp - z * this.H * 0.06 * camera;
+      // 自绘图案要立在水面之上、保持可辨形状：按归一化 ny 直接定位，
+      // 只叠一点呼吸式起伏；普通点云仍用原来的地形算法。
+      const y = pinned
+        ? horizon - this.H * 0.46 * (1 - p.bz) - wave * this.H * persp
+        : horizon - (wave + 0.08) * this.H * persp - z * this.H * 0.06 * camera;
       if (x < -20 || x > this.W + 20) continue;
       // 流体扰动：推开后缓慢回流
       if (this.fluidEnabled && !this.reduced) {

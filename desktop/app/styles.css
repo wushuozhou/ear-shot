@@ -109,31 +109,29 @@ button { cursor: pointer; }
 }
 .nav-card:hover, .nav-card.active { color: var(--text); }
 .nav-card.active { background: var(--panel-2); box-shadow: inset 3px 0 var(--accent); }
-/* 正反面：沿 Y 轴翻转 -8° 露出背面说明 */
+/* 正反面：沿 Y 轴翻转 -8° 露出背面说明。
+   正面必须整块退场（opacity 0 + visibility hidden），否则图标与文字会
+   和背面说明叠在一起，看起来像"旧 UI 没擦干净"。 */
 .nav-card-inner { position: relative; display: block; transform-style: preserve-3d; perspective: 620px; }
 .nav-face { display: flex; align-items: center; gap: 12px; backface-visibility: hidden; }
-.nav-front { transition: transform .25s ease, opacity .25s ease; }
-.nav-card:hover .nav-front { transform: rotateY(-8deg); opacity: .14; transition: transform .42s var(--ease-spring), opacity .42s var(--ease-spring); }
+.nav-front { transition: transform .25s ease, opacity .25s ease, visibility 0s linear .25s; }
+.nav-card:hover .nav-front {
+  transform: rotateY(-8deg); opacity: 0; visibility: hidden;
+  transition: transform .42s var(--ease-spring), opacity .2s ease, visibility 0s linear .2s;
+}
 .nav-back {
   position: absolute; inset: 0; align-items: center;
   color: var(--text); font-size: 12px; letter-spacing: .01em;
-  opacity: 0; transform: rotateY(8deg);
-  transition: transform .25s ease, opacity .25s ease;
+  opacity: 0; transform: rotateY(8deg); visibility: hidden;
+  transition: transform .25s ease, opacity .25s ease, visibility 0s linear .25s;
 }
-.nav-card:hover .nav-back { opacity: 1; transform: rotateY(0deg); transition: transform .42s var(--ease-spring), opacity .42s var(--ease-spring); }
+.nav-card:hover .nav-back {
+  opacity: 1; transform: rotateY(0deg); visibility: visible;
+  transition: transform .42s var(--ease-spring), opacity .28s ease, visibility 0s;
+}
 .nav-icon { width: 24px; flex: 0 0 24px; text-align: center; }
 .nav-icon svg { width: 24px; height: 24px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .nav-label { font-size: 14px; }
-/* 右下角圆形按钮：先沿对角线外推 10px 并缩到 .8，再弹回（overshoot 12%） */
-.nav-action {
-  position: absolute; right: 9px; bottom: 9px; display: grid; place-items: center;
-  width: 20px; height: 20px; border-radius: 50%;
-  color: var(--accent-text); background: var(--accent);
-  opacity: 0; transform: translate(10px, -10px) scale(.8);
-  transition: opacity .25s ease, transform .25s ease;
-}
-.nav-action svg { width: 11px; height: 11px; }
-.nav-card:hover .nav-action { opacity: 1; transform: translate(0, 0) scale(1); transition: opacity .42s var(--ease-spring), transform .42s var(--ease-spring); }
 /* 底部技能标签：高度 0 → 自然高度，透明度 0 → 1 */
 .nav-tag {
   display: block; overflow: hidden; max-height: 0; opacity: 0;
@@ -144,13 +142,12 @@ button { cursor: pointer; }
 /* 收起侧边栏时只留图标，这些装饰全部隐藏 */
 .shell.sidebar-collapsed .nav-card { padding: 12px 0; }
 .shell.sidebar-collapsed .nav-card:hover { transform: none; box-shadow: none; }
-.shell.sidebar-collapsed .nav-front { justify-content: center; gap: 0; transform: none !important; opacity: 1 !important; }
+.shell.sidebar-collapsed .nav-front { justify-content: center; gap: 0; transform: none !important; opacity: 1 !important; visibility: visible !important; }
 .shell.sidebar-collapsed .nav-label,
 .shell.sidebar-collapsed .nav-back,
-.shell.sidebar-collapsed .nav-action,
 .shell.sidebar-collapsed .nav-tag { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .nav-card, .nav-front, .nav-back, .nav-action, .nav-tag { transition: none !important; }
+  .nav-card, .nav-front, .nav-back, .nav-tag { transition: none !important; }
   .nav-card:hover { transform: none; }
 }
 /* 首屏遮罩 */
@@ -181,13 +178,13 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .button:hover { background: color-mix(in srgb, var(--accent) 92%, var(--text)); }
 .button:disabled { cursor: not-allowed; opacity: .55; }
 /* 按下即反馈：100ms、不回弹；焦点环键盘可见 */
-.button, .nav-action, .background-swatch, .theme-option { transition: transform .1s ease-out, background-color .16s cubic-bezier(.2,0,0,1), border-color .16s cubic-bezier(.2,0,0,1); }
+.button, .background-swatch, .theme-option { transition: transform .1s ease-out, background-color .16s cubic-bezier(.2,0,0,1), border-color .16s cubic-bezier(.2,0,0,1); }
 .button:active:not(:disabled), .background-swatch:active, .theme-option:active { transform: scale(.97); }
 .button:focus-visible, .background-swatch:focus-visible, .theme-option:focus-visible, .scene-chip:focus-visible, .nav-card:focus-visible {
   outline: 2px solid var(--focus); outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .button, .nav-action, .background-swatch, .theme-option { transition: background-color .16s ease, border-color .16s ease; }
+  .button, .background-swatch, .theme-option { transition: background-color .16s ease, border-color .16s ease; }
   .button:active:not(:disabled), .background-swatch:active, .theme-option:active { transform: none; }
 }
 .button-quiet { color: var(--text); border-color: var(--line); background: transparent; font-weight: 400; }
@@ -296,21 +293,18 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .message-row.user { justify-content: flex-end; }
 .message-row.assistant { justify-content: flex-start; }
 /* 切换联系人时的气泡落位：从各自来向（用户右 / AI 左）贴着时间轴依次抵达。
-   临界阻尼式缓动，不过冲——气泡不是手势抛出的，不该有回弹。 */
+   临界阻尼式缓动，不过冲——气泡不是手势抛出的，不该有回弹。
+   0.26s 响应，开页几乎立刻读得到内容；历史消息保持全不透明，不做压暗。 */
 .message-row.msg-enter { opacity: 0; will-change: transform, opacity; }
-.message-row.msg-enter.user { transform: translate3d(20px, 16px, 0) scale(.965); }
-.message-row.msg-enter.assistant { transform: translate3d(-20px, 16px, 0) scale(.965); }
+.message-row.msg-enter.user { transform: translate3d(12px, 10px, 0) scale(.98); }
+.message-row.msg-enter.assistant { transform: translate3d(-12px, 10px, 0) scale(.98); }
 .message-row.msg-in {
   opacity: 1; transform: translate3d(0, 0, 0) scale(1);
-  transition: opacity .5s cubic-bezier(.22, .61, .36, 1), transform .5s cubic-bezier(.22, .61, .36, 1);
+  transition: opacity .26s cubic-bezier(.22, .61, .36, 1), transform .26s cubic-bezier(.22, .61, .36, 1);
 }
-/* 已落位的旧消息退为背景层，把注意力交给最新一条 */
-.message-row.msg-settled { opacity: .6; transition: opacity .45s ease-out; }
-.message-row.msg-settled:hover { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .message-row.msg-enter { opacity: 0; transform: none !important; }
-  .message-row.msg-in { transition: opacity .2s ease; }
-  .message-row.msg-settled { opacity: 1; transition: none; }
+  .message-row.msg-in { transition: opacity .16s ease; }
 }
 .message-bubble { position: relative; max-width: min(760px, 70%); padding: 9px 13px; border-radius: 6px; color: #191919; background: #FFFFFF; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; cursor: default; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
 /* 气泡尖角 */
@@ -520,6 +514,36 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
   /* 降级为纯淡入，不做缩放位移 */
   .hue-panel { transform: none !important; transition: opacity .18s ease; }
 }
+/* 点云自绘图案与粒子密度 */
+.pattern-field, .density-field { margin-top: 4px; }
+.pattern-bar { display: flex; align-items: center; gap: 10px; }
+.pattern-thumb {
+  display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px;
+  border: 1px solid var(--border); border-radius: 8px; background: #000 center/cover no-repeat;
+  color: var(--faint); font-size: 10px;
+}
+.pattern-panel {
+  margin-top: 10px; padding: 12px; width: max-content;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--panel-2);
+  box-shadow: 0 12px 30px rgba(0,0,0,.18);
+  transform-origin: top right;
+  opacity: 0; transform: scale(.94) translateY(-6px);
+  transition: opacity .22s cubic-bezier(.2,0,0,1), transform .22s cubic-bezier(.2,0,0,1);
+}
+.pattern-panel.open { opacity: 1; transform: scale(1) translateY(0); }
+.pattern-panel[hidden] { display: none; }
+.pattern-canvas {
+  display: block; width: 220px; height: 220px; border: 1px solid var(--border); border-radius: 10px;
+  background: #000; cursor: crosshair; touch-action: none;
+}
+.pattern-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.density-row { display: flex; align-items: center; gap: 12px; }
+.density-row input[type=range] { width: 180px; accent-color: var(--accent); }
+.density-row input[type=range]:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .pattern-panel { transform: none !important; transition: opacity .18s ease; }
+}
+
 /* 应用背景图存在时，面板转为半透明材质，内容在材质之上 */
 :root.has-app-background body { background-size: cover; background-position: center; background-attachment: fixed; }
 :root.has-app-background .sidebar,

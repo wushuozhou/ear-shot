@@ -155,33 +155,7 @@ function buildPainting() {
   g.fillStyle = ground;
   g.fillRect(0, h * 0.78, w, h * 0.22);
 
-  // 柏树：文艺复兴风景里的标志性垂直线条
-  const cypress = (cx, baseY, height, width, tone) => {
-    g.save();
-    const grd = g.createLinearGradient(cx - width, baseY - height, cx + width, baseY);
-    grd.addColorStop(0, tone[0]);
-    grd.addColorStop(1, tone[1]);
-    g.fillStyle = grd;
-    g.beginPath();
-    g.moveTo(cx, baseY - height);
-    for (let t = 0; t <= 1.0001; t += 0.05) {
-      const y = baseY - height * (1 - t);
-      const bulge = Math.sin(t * Math.PI) * 0.72 + t * 0.3;
-      g.lineTo(cx + width * bulge * (0.82 + fbm(t * 7, cx * 0.02, 2) * 0.4), y);
-    }
-    for (let t = 1; t >= -0.0001; t -= 0.05) {
-      const y = baseY - height * (1 - t);
-      const bulge = Math.sin(t * Math.PI) * 0.72 + t * 0.3;
-      g.lineTo(cx - width * bulge * (0.82 + fbm(t * 7 + 3, cx * 0.02, 2) * 0.4), y);
-    }
-    g.closePath();
-    g.fill();
-    g.restore();
-  };
-  cypress(w * 0.17, h * 0.95, h * 0.56, w * 0.035, ['#2B3B2A', '#16221A']);
-  cypress(w * 0.265, h * 0.97, h * 0.42, w * 0.028, ['#243520', '#121D15']);
-  cypress(w * 0.83, h * 0.96, h * 0.62, w * 0.038, ['#2E4030', '#16231A']);
-  cypress(w * 0.74, h * 0.98, h * 0.36, w * 0.025, ['#223119', '#101A12']);
+  // 地平线保持开阔：不画柏树林，让云层与天光自己成为主体
 
   // 油画感：画布纹理 + 暗角 + 上光
   const tex = g.getImageData(0, 0, w, h);

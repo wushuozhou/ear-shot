@@ -756,26 +756,21 @@ function renderConversationMessages() {
     const rows = messages.map(message => rowFor(message));
     rows.forEach(row => stream.append(row));
     if (state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
-    // 切换联系人时按时间轴依次落位：每枚 0.5s、间隔 180ms，总时长收在 1.6s 内，
-    // 先出现的降到 0.6 不透明度退为背景层，最新一枚保持 1.0。
+    // 切换联系人时按时间轴依次落位：单枚 0.26s、间隔 60ms，整组约 0.6s 收完。
+    // 所有消息最终都保持 1.0 不透明度——历史记录不该被压暗，读起来才完整。
     if (state.enterAnimation && rows.length) {
       state.enterAnimation = false;
       const tail = rows.slice(-6);
-      const gap = Math.min(180, 1100 / Math.max(1, tail.length));
-      rows.slice(0, rows.length - tail.length).forEach(row => row.classList.add('msg-settled'));
+      const gap = Math.min(60, 360 / Math.max(1, tail.length));
       tail.forEach(row => row.classList.add('msg-enter'));
       // 强制一次样式计算把起始态落定，再调度落位。
       // 不用 requestAnimationFrame：窗口在后台时 rAF 会被节流，动画会迟迟不启动甚至看起来卡住。
       void stream.offsetHeight;
       tail.forEach((row, index) => {
-        const last = index === tail.length - 1;
         setTimeout(() => {
           row.classList.add('msg-in');
           // 入场结束后撤掉 will-change，避免长期占着合成层
-          setTimeout(() => {
-            row.classList.remove('msg-enter');
-            if (!last) row.classList.add('msg-settled');
-          }, 500);
+          setTimeout(() => row.classList.remove('msg-enter'), 260);
         }, index * gap);
       });
     }
@@ -1075,7 +1070,7 @@ function renderConversation() {
   fileButton.addEventListener('click', () => fileInput.click());
   const voiceToggle = document.createElement('label');
   voiceToggle.className = `compose-voice-toggle${state.aiVoiceReply ? ' on' : ''}`;
-  voiceToggle.title = 'AI 用语音回复';
+  voiceToggle.title = '让 AI 发语音回复';
   const voiceCheck = document.createElement('input');
   voiceCheck.type = 'checkbox';
   voiceCheck.checked = state.aiVoiceReply;
@@ -1091,7 +1086,7 @@ function renderConversation() {
     }
   });
   const voiceLabel = document.createElement('span');
-  voiceLabel.textContent = 'AI 语音';
+  voiceLabel.textContent = '发语音';
   voiceToggle.append(voiceCheck, voiceLabel);
   const pasteHint = document.createElement('span');
   pasteHint.className = 'compose-hint';
@@ -2271,6 +2266,163 @@ function applyAppBackground(value) {
   root.classList.remove('has-app-background');
 }
 
+// 自绘图案：一块小画板，用户画出的笔迹会被点云采样成形状。
+// 1:1 跟手（Pointer Events），按下即落笔，不等 click。
+function patternPad(current, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'pattern-field';
+  const bar = document.createElement('div');
+  bar.className = 'pattern-bar';
+  const thumb = document.createElement('span');
+  thumb.className = 'pattern-thumb';
+  const status = document.createElement('span');
+  status.className = 'hue-readout';
+  const toggle = button('绘制图案', 'button button-quiet button-small');
+  toggle.setAttribute('aria-expanded', 'false');
+  const panel = document.createElement('div');
+  panel.className = 'pattern-panel';
+  panel.hidden = true;
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'pattern-canvas';
+  canvas.width = 256; canvas.height = 256;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', '点云图案画板');
+  const ctx = canvas.getContext('2d');
+  const resetCanvas = () => {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 256, 256);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = '#FFFFFF';
+  };
+  resetCanvas();
+  const paintThumb = value => {
+    if (value) {
+      thumb.style.backgroundImage = `url("${value}")`;
+      thumb.textContent = '';
+      status.textContent = '已设置图案';
+    } else {
+      thumb.style.backgroundImage = '';
+      thumb.textContent = '无';
+      status.textContent = '点云自然起伏';
+    }
+  };
+  paintThumb(current);
+  // 已有图案时先铺回画板，便于继续改
+  if (current) {
+    const img = new Image();
+    img.onload = () => ctx.drawImage(img, 0, 0, 256, 256);
+    img.src = current;
+  }
+
+  let drawing = false;
+  const at = event => {
+    const r = canvas.getBoundingClientRect();
+    return [(event.clientX - r.left) / r.width * 256, (event.clientY - r.top) / r.height * 256];
+  };
+  canvas.addEventListener('pointerdown', event => {
+    drawing = true;
+    try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* 合成事件无真实指针 */ }
+    const [x, y] = at(event);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    // 按下即留痕，不必等移动
+    ctx.lineTo(x + 0.01, y);
+    ctx.stroke();
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!drawing) return;
+    const [x, y] = at(event);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  });
+  const stop = () => { drawing = false; };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+
+  const actions = document.createElement('div');
+  actions.className = 'pattern-actions';
+  const apply = button('用这个图案', 'button button-small');
+  apply.addEventListener('click', async () => {
+    const value = canvas.toDataURL('image/png');
+    try {
+      await onChange(value);
+      paintThumb(value);
+      showMessage('点云图案已更新');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  const clear = button('清空画板', 'button button-quiet button-small');
+  clear.addEventListener('click', () => resetCanvas());
+  const remove = button('不用图案', 'button button-quiet button-small');
+  remove.addEventListener('click', async () => {
+    try {
+      await onChange('');
+      resetCanvas();
+      paintThumb('');
+      showMessage('点云恢复自然起伏');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  actions.append(apply, clear, remove);
+  const tip = document.createElement('p');
+  tip.className = 'settings-note';
+  tip.textContent = '在黑底上画白色笔迹，点云会按笔迹聚成这个形状，并带上倒影。';
+  panel.append(canvas, tip, actions);
+
+  const setOpen = open => {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? '收起' : '绘制图案';
+    if (open) {
+      panel.hidden = false;
+      void panel.offsetHeight;
+      panel.classList.add('open');
+    } else {
+      panel.classList.remove('open');
+      setTimeout(() => { if (!panel.classList.contains('open')) panel.hidden = true; }, 220);
+    }
+  };
+  toggle.addEventListener('click', () => setOpen(toggle.getAttribute('aria-expanded') !== 'true'));
+  panel.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.stopPropagation();
+    setOpen(false);
+    toggle.focus();
+  });
+
+  bar.append(thumb, status, toggle);
+  wrap.append(bar, panel);
+  return wrap;
+}
+
+// 密度滑杆：拖动即时预览，松手落盘
+function densitySlider(current, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'density-field';
+  const row = document.createElement('div');
+  row.className = 'density-row';
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = '0.2'; input.max = '2.2'; input.step = '0.1';
+  input.value = String(current === '' || current === null || current === undefined ? 1 : current);
+  input.setAttribute('aria-label', '粒子密度');
+  const readout = document.createElement('span');
+  readout.className = 'hue-readout';
+  const paint = () => { readout.textContent = `${Number(input.value).toFixed(1)}×`; };
+  paint();
+  input.addEventListener('input', paint);
+  input.addEventListener('change', () => onChange(Number(input.value)));
+  const reset = button('标准', 'button button-quiet button-small');
+  reset.addEventListener('click', () => { input.value = '1'; paint(); onChange(1); });
+  row.append(input, readout, reset);
+  wrap.append(row);
+  return wrap;
+}
+
 // 背景选择：纯色预设 + 内置动效场景 + 自定义图片/视频/HTML，通话背景默认纯黑。
 function backgroundPicker(label, current, onChange, options = {}) {
   const { scenes = false, media = false, html = false } = options;
@@ -2673,6 +2825,31 @@ async function renderSettings() {
     }, 120);
   }));
   backgroundCard.append(hueField);
+  // 粒子密度：对粒子雨与点云同时生效
+  const densityField = document.createElement('div');
+  densityField.className = 'background-field';
+  const densityTitle = document.createElement('span');
+  densityTitle.className = 'background-title';
+  densityTitle.textContent = '粒子密度';
+  const densityNote = document.createElement('p');
+  densityNote.className = 'settings-note';
+  densityNote.textContent = '调整粒子雨与点云的疏密，低端设备会在此基础上自动降档。';
+  densityField.append(densityTitle, densityNote, densitySlider(state.backdropDensity, value => {
+    state.backdropDensity = value;
+    window.desktop.app.settings.save({ backdropDensity: value }).catch(error => showError(error.message));
+  }));
+  backgroundCard.append(densityField);
+  // 点云自绘图案
+  const patternField = document.createElement('div');
+  patternField.className = 'background-field';
+  const patternTitle = document.createElement('span');
+  patternTitle.className = 'background-title';
+  patternTitle.textContent = '点云图案';
+  patternField.append(patternTitle, patternPad(state.backdropPattern, async value => {
+    state.backdropPattern = value;
+    await window.desktop.app.settings.save({ backdropPattern: value });
+  }));
+  backgroundCard.append(patternField);
   // 流体光标扰动开关
   backgroundCard.append(prefRow(
     '流体光标扰动',
@@ -3188,6 +3365,8 @@ async function bootstrapUi() {
     state.callBackground = settings?.callBackground || '';
     state.callBackdropHue = settings?.callBackdropHue ?? '';
     state.fluidCursor = settings?.fluidCursor !== false;
+    state.backdropDensity = settings?.backdropDensity ?? '';
+    state.backdropPattern = settings?.backdropPattern || '';
     state.themeHue = settings?.themeHue ?? '';
     state.appBackground = settings?.appBackground || '';
     applyThemeHue(state.themeHue);

@@ -28,6 +28,8 @@ let INFO = { name: 'Earshot', lang: 'zh', needsToken: false };
 let backdrop = null;
 let BACKDROP_HUE = null;
 let FLUID_CURSOR = true;
+let BACKDROP_DENSITY = 1;
+let BACKDROP_PATTERN = '';
 
 function backdropLayer() {
   let layer = document.getElementById('backdrop-layer');
@@ -63,7 +65,9 @@ function applyCallBackground(value, detail = {}) {
     backdrop = new CallBackdrop(canvas);
     backdrop.setScene(raw.slice(6) || 'point-cloud');
     if (BACKDROP_HUE !== null) backdrop.setHue(BACKDROP_HUE);
+    backdrop.setDensity(BACKDROP_DENSITY);
     backdrop.setFluid(FLUID_CURSOR);
+    if (BACKDROP_PATTERN) backdrop.setPattern(BACKDROP_PATTERN);
     backdrop.mount();
     return;
   }
@@ -137,6 +141,14 @@ function applyContact(detail) {
   if (typeof detail.fluidCursor === 'boolean') {
     FLUID_CURSOR = detail.fluidCursor;
     backdrop?.setFluid(FLUID_CURSOR);
+  }
+  if (detail.backdropDensity !== undefined && detail.backdropDensity !== '') {
+    BACKDROP_DENSITY = Number(detail.backdropDensity) || 1;
+    backdrop?.setDensity(BACKDROP_DENSITY);
+  }
+  if (typeof detail.backdropPattern === 'string') {
+    BACKDROP_PATTERN = detail.backdropPattern;
+    backdrop?.setPattern(BACKDROP_PATTERN);
   }
   const label = CONTACT.name || INFO.name;
   document.querySelectorAll('.name').forEach(node => { node.textContent = label; });

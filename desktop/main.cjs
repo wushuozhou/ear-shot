@@ -758,6 +758,23 @@ function registerIpc() {
       }
     }
     if (typeof patch.fluidCursor === 'boolean') next.fluidCursor = patch.fluidCursor;
+    if (patch.backdropDensity !== undefined) {
+      const raw = patch.backdropDensity;
+      if (raw === '' || raw === null) next.backdropDensity = '';
+      else {
+        const d = Number(raw);
+        if (!Number.isFinite(d) || d < 0.2 || d > 2.2) throw new Error('密度需要是 0.2–2.2 的数值');
+        next.backdropDensity = Math.round(d * 100) / 100;
+      }
+    }
+    if (patch.backdropPattern !== undefined) {
+      const value = String(patch.backdropPattern || '');
+      if (value && !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value)) {
+        throw new Error('图案格式无效');
+      }
+      if (value.length > 4 * 1024 * 1024) throw new Error('图案过大，请重新绘制');
+      next.backdropPattern = value;
+    }
     if (patch.toneText !== undefined) {
       if (typeof patch.toneText !== 'string' || patch.toneText.length > 2000) throw new Error('全局语气需要是 2000 字以内的文本');
       next.toneText = patch.toneText;
