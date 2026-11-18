@@ -426,23 +426,61 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
 .call-log-text span { color: var(--faint); font-size: 11px; }
 
 /* iOS 风格拨号盘 */
-.keypad { max-width: 320px; margin: 24px auto 0; display: grid; gap: 14px; justify-items: center; }
-.keypad-display { min-height: 38px; font-size: 30px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
-.keypad-hint { color: var(--muted); font-size: 12px; min-height: 1em; }
-.keypad-grid { display: grid; grid-template-columns: repeat(3, 72px); gap: 14px; }
-.keypad-key { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: var(--text); background: var(--panel-2); cursor: pointer; }
-.keypad-key:hover { background: var(--border); }
-.keypad-key strong { font-size: 26px; font-weight: 400; line-height: 1; }
-.keypad-key span { color: var(--faint); font-size: 9px; letter-spacing: .14em; }
-.keypad-actions { display: grid; grid-template-columns: repeat(3, 72px); gap: 14px; align-items: center; justify-items: center; }
-/* iOS 的拨号键是饱和绿配白图标。 */
-.keypad-dial { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #30D158; box-shadow: 0 6px 18px rgba(48,209,88,.32); cursor: pointer; }
+/* ── 拨号盘 ──
+   三段式：号码区 / 键盘 / 操作区。号码用等宽数字，输入时不会左右跳动。
+   触控目标 ≥44px（实际 72px），按下即反馈、不等 click。 */
+.keypad { width: min(320px, 100%); margin: 8px auto 0; display: grid; gap: 22px; justify-items: center; }
+.keypad-head { display: grid; gap: 6px; justify-items: center; min-height: 64px; align-content: center; }
+.keypad-display {
+  font-size: 34px; font-weight: 300; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: .02em; color: var(--text);
+}
+/* 空态用更轻的字重与弱化颜色，不抢键盘的注意力 */
+.keypad-display.empty { font-size: 22px; color: var(--faint); letter-spacing: .06em; }
+.keypad-hint { color: var(--muted); font-size: 12.5px; min-height: 1.2em; letter-spacing: .01em; }
+.keypad-hint.matched { color: var(--accent); font-weight: 500; }
+.keypad-grid { display: grid; grid-template-columns: repeat(3, 72px); gap: 18px 24px; }
+.keypad-key {
+  display: grid; place-items: center; gap: 1px;
+  width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%;
+  color: var(--text); background: var(--panel-2); cursor: pointer;
+  transition: transform .1s ease-out, background-color .16s cubic-bezier(.2,0,0,1);
+}
+.keypad-key:hover { background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); }
+/* 按下瞬间就给确认，不等抬手 */
+.keypad-key:active { transform: scale(.93); background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); }
+.keypad-key:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.keypad-key strong { font-size: 28px; font-weight: 400; line-height: 1; font-variant-numeric: tabular-nums; }
+.keypad-key span { color: var(--faint); font-size: 9px; font-weight: 500; letter-spacing: .16em; }
+.keypad-actions { display: grid; grid-template-columns: repeat(3, 72px); gap: 24px; align-items: center; justify-items: center; }
+.keypad-spacer { display: block; width: 72px; height: 72px; }
+/* 拨号键：饱和绿 + 白图标，可用时有柔和投影 */
+.keypad-dial {
+  display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%;
+  color: #fff; background: #30D158; box-shadow: 0 8px 22px rgba(48,209,88,.34); cursor: pointer;
+  transition: transform .1s ease-out, box-shadow .2s cubic-bezier(.2,0,0,1), opacity .2s ease, background-color .2s ease;
+}
 .keypad-dial svg { width: 30px; height: 30px; color: #fff; fill: #fff; }
-.keypad-dial:disabled { opacity: .35; box-shadow: none; cursor: not-allowed; }
-.keypad-back { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: var(--panel-2); cursor: pointer; }
-.keypad-back:hover:not(:disabled) { color: var(--text); background: var(--border); }
+.keypad-dial:hover:not(:disabled) { background: #28BB4D; box-shadow: 0 10px 26px rgba(48,209,88,.42); }
+.keypad-dial:active:not(:disabled) { transform: scale(.93); box-shadow: 0 4px 12px rgba(48,209,88,.3); }
+.keypad-dial:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* 不可用时降为中性灰，不用绿色暗示"可以打" */
+.keypad-dial:disabled { color: var(--faint); background: var(--panel-2); box-shadow: none; cursor: not-allowed; }
+.keypad-dial:disabled svg { color: var(--faint); fill: var(--faint); }
+.keypad-back {
+  display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%;
+  color: var(--muted); background: transparent; cursor: pointer;
+  transition: transform .1s ease-out, color .16s ease, background-color .16s ease;
+}
+.keypad-back:hover { color: var(--text); background: var(--panel-2); }
+.keypad-back:active { transform: scale(.93); }
+.keypad-back:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .keypad-back svg { width: 26px; height: 26px; }
-.keypad-back:disabled { opacity: .3; cursor: not-allowed; }
+.keypad-back[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .keypad-key, .keypad-dial, .keypad-back { transition: background-color .16s ease, color .16s ease; }
+  .keypad-key:active, .keypad-dial:active:not(:disabled), .keypad-back:active { transform: none; }
+}
 
 /* 收藏 */
 /* 收藏：按微信收藏的卡片风格，顶部一行标题与时间，下面是内容 */
@@ -514,6 +552,15 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
   /* 降级为纯淡入，不做缩放位移 */
   .hue-panel { transform: none !important; transition: opacity .18s ease; }
 }
+/* 光雾配色 */
+.fog-field { margin-top: 4px; display: grid; gap: 10px; }
+.fog-custom { display: flex; align-items: center; gap: 8px; }
+.fog-swatch {
+  width: 34px; height: 30px; flex: 0 0 34px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); cursor: pointer;
+}
+.fog-swatch:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
 /* 点云自绘图案与粒子密度 */
 .pattern-field, .density-field { margin-top: 4px; }
 .pattern-bar { display: flex; align-items: center; gap: 10px; }

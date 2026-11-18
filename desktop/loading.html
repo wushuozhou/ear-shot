@@ -45,7 +45,6 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let W = 0, H = 0, DPR = 1;
 let frame = { x: 0, y: 0, w: 0, h: 0 };
-let painting = null;      // 预渲染的油画（铺满全屏，用于溢出画框）
 let cardShot = null;      // 中心卡片快照，供溶解转场逐像素剥离
 let cardField = null;     // 卡片的分形噪声场
 let cardImage = null;     // 复用的 ImageData，避免每帧分配
@@ -93,91 +92,6 @@ function buildStars() {
     });
   }
 }
-
-// ── 文艺复兴式云与柏树油画：离屏预渲染一次，之后只做遮罩与缩放 ──
-function buildPainting() {
-  const c = document.createElement('canvas');
-  c.width = Math.max(640, Math.round(W * 0.7));
-  c.height = Math.max(480, Math.round(H * 0.7));
-  const g = c.getContext('2d');
-  const w = c.width, h = c.height;
-
-  // 天光：底部暖金，上部偏冷，模拟黄昏穹顶
-  const sky = g.createLinearGradient(0, 0, 0, h);
-  sky.addColorStop(0, '#1C2740');
-  sky.addColorStop(0.42, '#4A5A77');
-  sky.addColorStop(0.72, '#C8A571');
-  sky.addColorStop(1, '#E6C894');
-  g.fillStyle = sky;
-  g.fillRect(0, 0, w, h);
-
-  // 云层：用 fbm 做体积感，亮部偏暖、暗部偏紫
-  const img = g.getImageData(0, 0, w, h);
-  const d = img.data;
-  const scale = 3.2 / w;
-  for (let y = 0; y < h; y++) {
-    const ny = y * scale * (w / h);
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const n = fbm(x * scale * 2.4, ny * 2.4, 5);
-      const band = clamp01((0.62 - y / h) * 1.9);
-      const cloud = clamp01((n - 0.46) * 2.6) * (0.35 + band * 0.75);
-      if (cloud <= 0) continue;
-      const warm = clamp01((y / h) * 1.2);
-      const lightR = lerp(214, 248, warm), lightG = lerp(206, 226, warm), lightB = lerp(226, 188, warm);
-      const shadeR = 92, shadeG = 86, shadeB = 112;
-      const shade = clamp01((n - 0.52) * 3.4);
-      const r = lerp(shadeR, lightR, shade), gg = lerp(shadeG, lightG, shade), b = lerp(shadeB, lightB, shade);
-      const a = cloud * 0.92;
-      d[i] = d[i] * (1 - a) + r * a;
-      d[i + 1] = d[i + 1] * (1 - a) + gg * a;
-      d[i + 2] = d[i + 2] * (1 - a) + b * a;
-    }
-  }
-  g.putImageData(img, 0, 0);
-
-  // 远山与地平线
-  g.save();
-  g.globalAlpha = 0.5;
-  g.fillStyle = '#54506A';
-  g.beginPath();
-  g.moveTo(0, h * 0.74);
-  for (let x = 0; x <= w; x += 12) {
-    g.lineTo(x, h * 0.74 - fbm(x * 0.004, 7.3, 3) * h * 0.08);
-  }
-  g.lineTo(w, h); g.lineTo(0, h); g.closePath(); g.fill();
-  g.restore();
-
-  // 地面
-  const ground = g.createLinearGradient(0, h * 0.72, 0, h);
-  ground.addColorStop(0, '#5C5436');
-  ground.addColorStop(1, '#2C2A1E');
-  g.fillStyle = ground;
-  g.fillRect(0, h * 0.78, w, h * 0.22);
-
-  // 地平线保持开阔：不画柏树林，让云层与天光自己成为主体
-
-  // 油画感：画布纹理 + 暗角 + 上光
-  const tex = g.getImageData(0, 0, w, h);
-  const td = tex.data;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const weave = (Math.sin(x * 1.7) + Math.sin(y * 1.9)) * 2.2 + (valueNoise(x * 0.5, y * 0.5) - 0.5) * 10;
-      td[i] = clamp01((td[i] + weave) / 255) * 255;
-      td[i + 1] = clamp01((td[i + 1] + weave) / 255) * 255;
-      td[i + 2] = clamp01((td[i + 2] + weave) / 255) * 255;
-    }
-  }
-  g.putImageData(tex, 0, 0);
-  const vig = g.createRadialGradient(w / 2, h * 0.46, Math.min(w, h) * 0.22, w / 2, h * 0.5, Math.max(w, h) * 0.72);
-  vig.addColorStop(0, 'rgba(0,0,0,0)');
-  vig.addColorStop(1, 'rgba(8,6,12,.62)');
-  g.fillStyle = vig;
-  g.fillRect(0, 0, w, h);
-  return c;
-}
-
 // ── 两个古典飞行人物：剪影 + 飘带，速度不同 ──
 function drawFigure(g, x, y, scale, flip, alpha, tilt) {
   g.save();
@@ -378,46 +292,11 @@ function drawIntro(t, dt = 0) {
     ctx.restore();
   }
 
-  // 1.2–2.2s：油画以径向遮罩由内向外显影，并溢出画框铺满全屏
-  const reveal = span(t, 1.2, 2.2);
-  if (reveal > 0 && painting) {
-    const e = easeOutCubic(reveal);
-    const cx = x + w / 2, cy = y + h / 2;
-    const maxR = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy));
-    // 先画框内，再随进度溢出到整屏
-    const bleed = span(t, 1.75, 2.35);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, maxR * e, 0, TAU);
-    ctx.clip();
-    if (bleed < 1) {
-      ctx.save();
-      ctx.beginPath();
-      const ox = lerp(0, -x, bleed), oy = lerp(0, -y, bleed);
-      const ow = lerp(w, W, bleed), oh = lerp(h, H, bleed);
-      ctx.rect(x + ox, y + oy, ow, oh);
-      ctx.clip();
-      ctx.drawImage(painting, x + ox, y + oy, ow, oh);
-      ctx.restore();
-    } else {
-      ctx.drawImage(painting, 0, 0, W, H);
-    }
-    ctx.restore();
-    // 显影边缘的一圈微光
-    if (e < 1) {
-      ctx.save();
-      ctx.globalAlpha = 0.5 * (1 - e);
-      ctx.strokeStyle = 'rgba(255,240,214,.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy, maxR * e, 0, TAU); ctx.stroke();
-      ctx.restore();
-    }
-  }
+  // 纯黑场：不做油画显影。画框内保持黑底，让线稿、星芒与标题自己说话。
 
-  // 画框线保持可见，溢出后淡出
-  const frameAlpha = 1 - span(t, 2.0, 2.5) * 0.85;
+  // 画框线全程保持可见：黑场里它就是主体构图
   ctx.save();
-  ctx.globalAlpha = frameAlpha;
+  ctx.globalAlpha = 0.55 + Math.sin(t * 1.1) * 0.08;
   ctx.strokeStyle = 'rgba(226,240,255,.55)';
   ctx.lineWidth = 1;
   ctx.strokeRect(x, y, w, h);
@@ -593,16 +472,7 @@ function drawDissolve(t) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
-  // 新场景：从暗部起显影，延迟 0.4s
-  const incoming = span(t, 0.4, 1.6);
-  if (incoming > 0 && painting) {
-    ctx.save();
-    ctx.globalAlpha = easeInOutCubic(incoming) * 0.92;
-    ctx.drawImage(painting, 0, 0, W, H);
-    ctx.fillStyle = `rgba(0,0,0,${0.55 * (1 - incoming)})`;
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
+  // 溶解后留在纯黑场：主界面自己会接管画面，这里不再铺新场景
 
   const card = cardShot;
   const f = cardField;
@@ -682,7 +552,6 @@ function resize() {
   frame = { x: Math.round((W - fw) / 2), y: Math.round((H - fh) / 2), w: Math.round(fw), h: Math.round(fh) };
   buildStars();
   buildMotes();
-  painting = buildPainting();
   cardShot = buildCard();
   cardField = buildCardField(cardShot);
   cardImage = ctx.createImageData(cardField.w, cardField.h);
@@ -715,7 +584,6 @@ function tick(now) {
     // done：留在新场景上，等待主进程切页
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    if (painting) ctx.drawImage(painting, 0, 0, W, H);
   }
   requestAnimationFrame(tick);
 }
@@ -769,7 +637,6 @@ if (reduced) {
   // 降级：不做动画，直接给静态画面与状态
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  if (painting) ctx.drawImage(painting, 0, 0, W, H);
   showUi();
   window.__earshotTransitionDone = true;
   window.__earshotPlayTransition = () => Promise.resolve();

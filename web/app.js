@@ -30,6 +30,8 @@ let BACKDROP_HUE = null;
 let FLUID_CURSOR = true;
 let BACKDROP_DENSITY = 1;
 let BACKDROP_PATTERN = '';
+let BACKDROP_SHAPE = '';
+let FOG_COLORS = '';
 
 function backdropLayer() {
   let layer = document.getElementById('backdrop-layer');
@@ -67,6 +69,8 @@ function applyCallBackground(value, detail = {}) {
     if (BACKDROP_HUE !== null) backdrop.setHue(BACKDROP_HUE);
     backdrop.setDensity(BACKDROP_DENSITY);
     backdrop.setFluid(FLUID_CURSOR);
+    if (BACKDROP_SHAPE) backdrop.setShape(BACKDROP_SHAPE);
+    if (FOG_COLORS) backdrop.setFogColors(FOG_COLORS);
     if (BACKDROP_PATTERN) backdrop.setPattern(BACKDROP_PATTERN);
     backdrop.mount();
     return;
@@ -149,6 +153,14 @@ function applyContact(detail) {
   if (typeof detail.backdropPattern === 'string') {
     BACKDROP_PATTERN = detail.backdropPattern;
     backdrop?.setPattern(BACKDROP_PATTERN);
+  }
+  if (typeof detail.backdropShape === 'string') {
+    BACKDROP_SHAPE = detail.backdropShape;
+    backdrop?.setShape(BACKDROP_SHAPE);
+  }
+  if (typeof detail.fogColors === 'string') {
+    FOG_COLORS = detail.fogColors;
+    backdrop?.setFogColors(FOG_COLORS);
   }
   const label = CONTACT.name || INFO.name;
   document.querySelectorAll('.name').forEach(node => { node.textContent = label; });

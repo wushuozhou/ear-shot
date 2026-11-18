@@ -12,6 +12,84 @@ const PRESETS = {
   'aurora-fog': { name: '体积光雾', accents: ['#8040C1', '#7FD3CF'], base: '#090909' },
 };
 
+// ── 点云形状发生器 ──
+// 参考 Shopify Editions 的点云：形体由大量细点堆出来，靠密度而不是轮廓线成形。
+// 每个发生器返回归一化坐标 { nx: -1..1, ny: 0..1(上到下), depth: 0..1, lum: 0..1 }
+const SHAPES = {
+  // 树状：主干 + 递归分叉 + 冠层散点，像参考站里缓慢呼吸的有机体
+  tree(count) {
+    const pts = [];
+    const branches = [];
+    // 先生成骨架：从根部向上递归分叉
+    const grow = (x, y, angle, len, width, depth) => {
+      if (depth > 7 || len < 0.012) return;
+      const x2 = x + Math.cos(angle) * len;
+      const y2 = y - Math.sin(angle) * len;
+      branches.push({ x1: x, y1: y, x2, y2, width, depth });
+      const spread = 0.38 + Math.random() * 0.3;
+      const shrink = 0.72 + Math.random() * 0.12;
+      grow(x2, y2, angle - spread, len * shrink, width * 0.68, depth + 1);
+      grow(x2, y2, angle + spread, len * shrink, width * 0.68, depth + 1);
+      // 偶尔抽一根细枝，避免过于对称
+      if (depth < 4 && Math.random() < 0.45) {
+        grow(x2, y2, angle + (Math.random() - 0.5) * 0.5, len * shrink * 0.8, width * 0.5, depth + 2);
+      }
+    };
+    grow(0, 0.98, Math.PI / 2, 0.2, 0.055, 0);
+    const total = branches.reduce((s, b) => s + Math.hypot(b.x2 - b.x1, b.y2 - b.y1) * (1 + b.depth * 0.5), 0) || 1;
+    for (let i = 0; i < count; i++) {
+      // 按长度加权挑一段枝，越细的枝分到越多点 → 冠层自然浓密
+      let pick = Math.random() * total;
+      let b = branches[0];
+      for (const br of branches) {
+        pick -= Math.hypot(br.x2 - br.x1, br.y2 - br.y1) * (1 + br.depth * 0.5);
+        if (pick <= 0) { b = br; break; }
+      }
+      const t = Math.random();
+      // 沿枝干散开，末梢散得更开形成树冠
+      const jitter = b.width * (0.5 + b.depth * 0.42);
+      const nx = b.x1 + (b.x2 - b.x1) * t + (Math.random() - 0.5) * jitter * 2.2;
+      const ny = b.y1 + (b.y2 - b.y1) * t + (Math.random() - 0.5) * jitter * 1.6;
+      pts.push({
+        nx: Math.max(-1, Math.min(1, nx)),
+        ny: Math.max(0, Math.min(1, ny)),
+        depth: Math.random(),
+        lum: 0.45 + b.depth * 0.08 + Math.random() * 0.25,
+      });
+    }
+    return pts;
+  },
+  // 极光：数条垂直光幕，沿 x 正弦飘动，底部浓顶部散
+  aurora(count) {
+    const pts = [];
+    const curtains = 4;
+    const seeds = Array.from({ length: curtains }, (_, i) => ({
+      cx: -0.62 + i * (1.24 / (curtains - 1)),
+      freq: 1.6 + Math.random() * 1.8,
+      phase: Math.random() * Math.PI * 2,
+      amp: 0.1 + Math.random() * 0.14,
+      width: 0.05 + Math.random() * 0.06,
+    }));
+    for (let i = 0; i < count; i++) {
+      const s = seeds[(Math.random() * curtains) | 0];
+      // v 沿光幕高度：0 顶 1 底
+      const v = Math.random();
+      // 顶部越稀薄：用幂次把点往下压
+      const vy = Math.pow(v, 0.72);
+      const wave = Math.sin(vy * s.freq * Math.PI + s.phase) * s.amp;
+      // 横向用高斯状抖动，边缘自然羽化
+      const spread = (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+      pts.push({
+        nx: Math.max(-1, Math.min(1, s.cx + wave + spread * s.width * (1 + vy))),
+        ny: 0.14 + vy * 0.74,
+        depth: Math.random(),
+        lum: 0.3 + (1 - vy) * 0.55 + Math.random() * 0.2,
+      });
+    }
+    return pts;
+  },
+};
+
 const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -36,8 +114,10 @@ export class CallBackdrop {
     this.hue = null;           // null = 用预设配色；数字 = 用户色环
     this.intensity = 1;
     this.density = 1;          // 粒子密度倍率，设置页可调
-    this.pattern = '';         // 自绘图案（data URL），点云按其明暗分布取点
+    this.pattern = '';         // 自绘/导入图案（data URL），点云按其明暗分布汇聚
     this.patternPoints = null; // 从图案采样出的归一化坐标与颜色
+    this.shape = '';           // 内置形状：'' 自然起伏 | 'tree' 树状 | 'aurora' 极光
+    this.fogPalette = null;    // 体积光雾自定义配色（#rrggbb 数组），null 用场景/色环配色
     this.fluidEnabled = true;
     this.reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.running = false;
@@ -103,8 +183,18 @@ export class CallBackdrop {
     this.density = Math.max(0.2, Math.min(2.2, Number(value) || 1));
     this.build();
   }
-  // 自绘图案：把用户画的笔迹采样成点云坐标。亮处（有笔迹）才落点，
-  // 这样点云会"长成"图案的形状，同时保留原有的起伏与流体扰动。
+  setShape(shape) {
+    this.shape = SHAPES[shape] ? shape : '';
+    this.build();
+  }
+  // 体积光雾配色：传入 #rrggbb 数组即生效，传空恢复场景配色
+  setFogColors(colors) {
+    const list = (Array.isArray(colors) ? colors : String(colors || '').split(','))
+      .map(c => String(c).trim())
+      .filter(c => /^#[0-9a-fA-F]{6}$/.test(c));
+    this.fogPalette = list.length ? list : null;
+  }
+  // 图案：自绘笔迹或导入图片。把明暗分布采样成点云的汇聚目标。
   async setPattern(dataUrl) {
     this.pattern = dataUrl || '';
     if (!this.pattern) { this.patternPoints = null; this.build(); return; }
@@ -115,21 +205,30 @@ export class CallBackdrop {
         img.onerror = () => reject(new Error('图案无法解析'));
         img.src = this.pattern;
       });
-      const side = 128;
+      const side = 160;
       const off = document.createElement('canvas');
       off.width = off.height = side;
       const g = off.getContext('2d');
-      g.drawImage(bitmap, 0, 0, side, side);
+      // 导入的照片可能带透明或亮底，先铺黑底统一成"亮处=有点"的语义
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, side, side);
+      // 等比适配，避免长图被拉变形
+      const scale = Math.min(side / bitmap.width, side / bitmap.height);
+      const dw = bitmap.width * scale, dh = bitmap.height * scale;
+      g.drawImage(bitmap, (side - dw) / 2, (side - dh) / 2, dw, dh);
       const data = g.getImageData(0, 0, side, side).data;
       const points = [];
+      const cell = 1 / side;
       for (let y = 0; y < side; y++) {
         for (let x = 0; x < side; x++) {
           const i = (y * side + x) * 4;
           const alpha = data[i + 3] / 255;
           const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
-          // 透明处跳过；有像素就按亮度决定取点概率
-          if (alpha < 0.12 || lum < 0.1) continue;
-          points.push({ nx: x / side * 2 - 1, ny: y / side, lum, r: data[i], g: data[i + 1], b: data[i + 2] });
+          if (alpha < 0.12 || lum < 0.08) continue;
+          // 亮度越高权重越大：同一格可重复入选，密度自然随明暗变化
+          const weight = Math.max(1, Math.round(lum * 3));
+          const p = { nx: x / side * 2 - 1, ny: y / side, lum, cell, r: data[i], g: data[i + 1], b: data[i + 2] };
+          for (let k = 0; k < weight; k++) points.push(p);
         }
       }
       this.patternPoints = points.length ? points : null;
@@ -175,20 +274,43 @@ export class CallBackdrop {
     }
     this.cloud = [];
     const pts = this.patternPoints;
+    // 形状优先级：自绘/导入图案 > 内置形状（树状/极光）> 自然起伏地形
+    const shaped = pts && pts.length
+      ? null
+      : (SHAPES[this.shape] ? SHAPES[this.shape](cloud) : null);
     for (let i = 0; i < cloud; i++) {
       const [r, g, b] = hexToRgb(colors[i % colors.length]);
       if (pts && pts.length) {
-        // 自绘图案模式：按笔迹分布取点，颜色沿用图案本身但混入场景配色
+        // 图案模式：大量点按笔迹的亮度分布汇聚成该形状
         const p = pts[(Math.random() * pts.length) | 0];
+        // 每个点在采样格内再做亚像素抖动，点多时才不会叠成硬方块
+        const jx = (Math.random() - 0.5) * p.cell * 2;
+        const jy = (Math.random() - 0.5) * p.cell;
+        this.cloud.push({
+          bx: Math.max(-1, Math.min(1, p.nx + jx)),
+          by: Math.max(0, Math.min(1, p.ny + jy)),
+          bz: Math.random(),
+          phase: Math.random() * Math.PI * 2,
+          amp: 0.008 + Math.random() * 0.014,   // 图案要认得出，起伏幅度收小
+          r: Math.round((p.r + r) / 2), g: Math.round((p.g + g) / 2), b: Math.round((p.b + b) / 2),
+          a: 0.3 + p.lum * 0.55,
+          ox: 0, oy: 0,
+          pinned: true,
+        });
+        continue;
+      }
+      if (shaped) {
+        const p = shaped[i];
         this.cloud.push({
           bx: p.nx,
-          bz: 0.2 + (1 - p.ny) * 0.7,          // 图案上方的点推远一些，形成纵深
+          by: p.ny,
+          bz: p.depth,
           phase: Math.random() * Math.PI * 2,
-          amp: 0.012 + Math.random() * 0.02,   // 图案要认得出，起伏幅度收小
-          r: Math.round((p.r + r) / 2), g: Math.round((p.g + g) / 2), b: Math.round((p.b + b) / 2),
-          a: 0.35 + p.lum * 0.5,
+          amp: 0.012 + Math.random() * 0.022,
+          r, g, b,
+          a: 0.26 + p.lum * 0.52,
           ox: 0, oy: 0,
-          pinned: true,                        // 标记：锚定在图案上，不随正弦大幅起伏
+          pinned: true,
         });
         continue;
       }
@@ -318,17 +440,18 @@ export class CallBackdrop {
     const horizon = this.H * 0.62;             // 地平线压在下 1/3 偏上
     const camera = this.reduced ? 0.5 : (Math.sin(this.clock * 0.08) * 0.5 + 0.5); // 极慢推进
     ctx.save();
-    const pinned = !!(this.patternPoints && this.patternPoints.length);
     for (const p of this.cloud) {
       // 近大远小的伪透视
       const z = 0.12 + p.bz * 0.88;
       const persp = 1 / (0.35 + z * 1.5);
       const wave = Math.sin(this.clock * 0.35 + p.phase + p.bz * 4) * p.amp;
-      const x = this.W * 0.5 + p.bx * this.W * 0.62 * persp;
-      // 自绘图案要立在水面之上、保持可辨形状：按归一化 ny 直接定位，
-      // 只叠一点呼吸式起伏；普通点云仍用原来的地形算法。
-      const y = pinned
-        ? horizon - this.H * 0.46 * (1 - p.bz) - wave * this.H * persp
+      // 形状点（图案/树/极光）带 by，按归一化高度直接定位在水面之上，
+      // 这样形体才认得出；自然地形仍用原来的起伏算法。
+      const x = p.pinned
+        ? this.W * 0.5 + p.bx * this.W * 0.42
+        : this.W * 0.5 + p.bx * this.W * 0.62 * persp;
+      const y = p.pinned
+        ? horizon - (1 - p.by) * this.H * 0.52 - wave * this.H
         : horizon - (wave + 0.08) * this.H * persp - z * this.H * 0.06 * camera;
       if (x < -20 || x > this.W + 20) continue;
       // 流体扰动：推开后缓慢回流
@@ -361,13 +484,53 @@ export class CallBackdrop {
     ctx.globalAlpha = 1;
   }
 
-  // S03 近似：半透明径向光柱叠加 + 加色混合，8s 呼吸
+  // S03 体积光雾：沿深度排列的半透明切片 + 斜向光束穿行 + 边缘渐隐噪声，8s 呼吸。
+  // 关键是"光有厚度"：多层切片用加色混合叠出体积感，而不是单层径向渐变。
   drawFog(dt) {
     const ctx = this.ctx;
-    const colors = this.palette();
+    const colors = this.fogColors();
     const breathe = 0.78 + Math.sin(this.clock * (Math.PI * 2 / 8)) * 0.22;
+    const slices = this.tier === 1 ? 5 : this.tier === 2 ? 7 : 9;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
+
+    // 1) 体积光束：每条光束是一片倾斜的梯形光幕，沿深度方向分层
+    for (let i = 0; i < slices; i++) {
+      const depth = i / (slices - 1);           // 0 近 1 远
+      const c = colors[i % colors.length];
+      const [r, g, b] = hexToRgb(c);
+      const t = this.clock * 0.05 + i * 0.9;
+      // 远层更慢更淡，近层更快更亮 —— 视差造出厚度
+      const sway = Math.sin(t) * (0.2 - depth * 0.12);
+      const cx = this.W * (0.5 + sway);
+      const cy = this.H * (0.38 + Math.cos(t * 0.7) * 0.12);
+      let ox = 0, oy = 0;
+      if (this.fluidEnabled && !this.reduced) {
+        const f = this.sampleField(cx, cy);
+        ox = f[0] * (0.8 - depth * 0.5); oy = f[1] * (0.8 - depth * 0.5);
+      }
+      const alpha = (0.16 - depth * 0.1) * breathe * this.intensity;
+      if (alpha <= 0.002) continue;
+      // 斜向光柱：上窄下宽，模拟自上方透下的体积光
+      const topW = this.W * (0.08 + depth * 0.1);
+      const botW = this.W * (0.42 + depth * 0.3);
+      const tilt = Math.sin(t * 0.6) * this.W * 0.12;
+      const beam = ctx.createLinearGradient(cx + ox, 0, cx + ox + tilt, this.H);
+      beam.addColorStop(0, `rgba(${r},${g},${b},0)`);
+      beam.addColorStop(0.28, `rgba(${r},${g},${b},${alpha})`);
+      beam.addColorStop(0.72, `rgba(${r},${g},${b},${alpha * 0.55})`);
+      beam.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = beam;
+      ctx.beginPath();
+      ctx.moveTo(cx + ox - topW / 2, -10);
+      ctx.lineTo(cx + ox + topW / 2, -10);
+      ctx.lineTo(cx + ox + tilt + botW / 2, this.H + 10);
+      ctx.lineTo(cx + ox + tilt - botW / 2, this.H + 10);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 2) 弥散光团：给光束之间填上雾的"体"，边缘羽化
     for (let i = 0; i < colors.length; i++) {
       const t = this.clock * 0.06 + i * 1.7;
       const cx = this.W * (0.5 + Math.sin(t) * 0.26);
@@ -377,13 +540,27 @@ export class CallBackdrop {
       const radius = Math.min(this.W, this.H) * (0.42 + i * 0.1);
       const grad = ctx.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, radius);
       const [r, g, b] = hexToRgb(colors[i]);
-      grad.addColorStop(0, `rgba(${r},${g},${b},${0.3 * breathe * this.intensity})`);
-      grad.addColorStop(0.55, `rgba(${r},${g},${b},${0.1 * breathe * this.intensity})`);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${0.26 * breathe * this.intensity})`);
+      grad.addColorStop(0.55, `rgba(${r},${g},${b},${0.09 * breathe * this.intensity})`);
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, this.W, this.H);
     }
     ctx.restore();
+
+    // 3) 顶部压暗 + 底部收拢，避免整屏发白、保证文字可读
+    const vign = ctx.createLinearGradient(0, 0, 0, this.H);
+    vign.addColorStop(0, 'rgba(9,9,9,.5)');
+    vign.addColorStop(0.45, 'rgba(9,9,9,0)');
+    vign.addColorStop(1, 'rgba(9,9,9,.55)');
+    ctx.fillStyle = vign;
+    ctx.fillRect(0, 0, this.W, this.H);
+  }
+
+  // 体积光雾配色：优先用户自定义色；否则色环；再否则场景预设
+  fogColors() {
+    if (Array.isArray(this.fogPalette) && this.fogPalette.length) return this.fogPalette;
+    return this.palette();
   }
 
   // 全局颗粒 6–8%，避免大面积纯色带状感
@@ -412,3 +589,8 @@ export class CallBackdrop {
 }
 
 export const CALL_BACKDROP_SCENES = Object.entries(PRESETS).map(([id, p]) => ({ id, name: p.name }));
+export const CALL_BACKDROP_SHAPES = [
+  { id: '', name: '自然起伏' },
+  { id: 'tree', name: '树状' },
+  { id: 'aurora', name: '极光' },
+];

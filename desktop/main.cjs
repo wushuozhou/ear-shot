@@ -707,6 +707,10 @@ function registerIpc() {
     callBackground: config.callBackground || '',
     callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
     fluidCursor: config.fluidCursor !== false,
+    backdropDensity: config.backdropDensity === undefined ? '' : config.backdropDensity,
+    backdropPattern: config.backdropPattern || '',
+    backdropShape: config.backdropShape || '',
+    fogColors: config.fogColors || '',
     themeHue: config.themeHue === undefined ? '' : config.themeHue,
     appBackground: config.appBackground || '',
     toneId: config.activeToneId || '',
@@ -775,6 +779,20 @@ function registerIpc() {
       if (value.length > 4 * 1024 * 1024) throw new Error('图案过大，请重新绘制');
       next.backdropPattern = value;
     }
+    if (patch.backdropShape !== undefined) {
+      const value = String(patch.backdropShape || '');
+      if (value && !['tree', 'aurora'].includes(value)) throw new Error('点云形状无效');
+      next.backdropShape = value;
+    }
+    if (patch.fogColors !== undefined) {
+      const value = String(patch.fogColors || '');
+      // 逗号分隔的 #rrggbb，最多 5 个
+      if (value) {
+        const list = value.split(',').map(s => s.trim());
+        if (list.length > 5 || !list.every(c => /^#[0-9a-fA-F]{6}$/.test(c))) throw new Error('光雾配色无效');
+      }
+      next.fogColors = value;
+    }
     if (patch.toneText !== undefined) {
       if (typeof patch.toneText !== 'string' || patch.toneText.length > 2000) throw new Error('全局语气需要是 2000 字以内的文本');
       next.toneText = patch.toneText;
@@ -795,6 +813,10 @@ function registerIpc() {
       callBackground: config.callBackground || '',
       callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
       fluidCursor: config.fluidCursor !== false,
+      backdropDensity: config.backdropDensity === undefined ? '' : config.backdropDensity,
+      backdropPattern: config.backdropPattern || '',
+      backdropShape: config.backdropShape || '',
+      fogColors: config.fogColors || '',
       themeHue: config.themeHue === undefined ? '' : config.themeHue,
       appBackground: config.appBackground || '',
       toneId: config.activeToneId || '',

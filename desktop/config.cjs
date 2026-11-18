@@ -39,6 +39,14 @@ const DEFAULT_CONFIG = {
   visionEnabled: false,
   chatBackground: '',
   callBackground: '',
+  callBackdropHue: '',
+  fluidCursor: true,
+  backdropDensity: '',
+  backdropPattern: '',
+  backdropShape: '',
+  fogColors: '',
+  themeHue: '',
+  appBackground: '',
 };
 
 // v3: 外观默认改为浅色；电话样式聊天与通话波形默认开启。

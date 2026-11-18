@@ -34,6 +34,14 @@
     visionEnabled: false,
     chatBackground: '',
     callBackground: '',
+    callBackdropHue: '',
+    fluidCursor: true,
+    backdropDensity: '',
+    backdropPattern: '',
+    backdropShape: '',
+    fogColors: '',
+    themeHue: '',
+    appBackground: '',
     favorites: [],
     callLog: [],
   };
@@ -54,6 +62,14 @@
     visionEnabled: memory.visionEnabled,
     chatBackground: memory.chatBackground,
     callBackground: memory.callBackground,
+    callBackdropHue: memory.callBackdropHue,
+    fluidCursor: memory.fluidCursor,
+    backdropDensity: memory.backdropDensity,
+    backdropPattern: memory.backdropPattern,
+    backdropShape: memory.backdropShape,
+    fogColors: memory.fogColors,
+    themeHue: memory.themeHue,
+    appBackground: memory.appBackground,
   });
   const mock = {
     providers: {

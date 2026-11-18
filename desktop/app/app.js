@@ -29,6 +29,10 @@ const state = {
   callBackground: '',
   callBackdropHue: '',
   fluidCursor: true,
+  backdropDensity: '',
+  backdropPattern: '',
+  backdropShape: '',
+  fogColors: '',
   themeHue: '',
   appBackground: '',
   favorites: [],
@@ -1897,24 +1901,36 @@ function renderCallContacts(body, shell) {
   body.append(contacts);
 }
 
-// iOS 拨号盘：3×4 键位，底部一个绿色拨号键。
+// 拨号盘：号码区 → 键盘 → 操作区三段式。
+// 数字用等宽（tabular-nums），号码不会随输入左右跳动。
 function renderCallKeypad(body, shell) {
   const pad = document.createElement('div');
   pad.className = 'keypad';
-  const display = document.createElement('div');
-  display.className = 'keypad-display';
-  display.textContent = state.dialNumber ? formatNumber(state.dialNumber) : '';
-  pad.append(display);
+
   const matched = state.conversations.find(item => (item.number || conversationSettings(item).number) === state.dialNumber);
+
+  // 号码区：有号码时显示大号数字，空态给一行提示，高度固定避免布局跳动
+  const head = document.createElement('div');
+  head.className = 'keypad-head';
+  const display = document.createElement('div');
+  display.className = `keypad-display${state.dialNumber ? '' : ' empty'}`;
+  display.textContent = state.dialNumber ? formatNumber(state.dialNumber) : '输入号码';
   const hint = document.createElement('div');
-  hint.className = 'keypad-hint';
-  hint.textContent = state.dialNumber ? (matched ? matched.title : '没有匹配的联系人') : '输入号码呼叫联系人';
-  pad.append(hint);
+  hint.className = `keypad-hint${matched ? ' matched' : ''}`;
+  if (state.dialNumber) {
+    hint.textContent = matched ? matched.title : '没有匹配的联系人';
+  } else {
+    hint.textContent = '拨号给已保存的联系人';
+  }
+  head.append(display, hint);
+  pad.append(head);
+
   const grid = document.createElement('div');
   grid.className = 'keypad-grid';
   [['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
     ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'], ['*', ''], ['0', '+'], ['#', '']].forEach(([digit, letters]) => {
     const key = button('', 'keypad-key');
+    key.setAttribute('aria-label', letters ? `${digit} ${letters}` : digit);
     key.innerHTML = `<strong>${digit}</strong>${letters ? `<span>${letters}</span>` : ''}`;
     key.addEventListener('click', () => {
       if (!/\d/.test(digit)) return;
@@ -1924,10 +1940,13 @@ function renderCallKeypad(body, shell) {
     grid.append(key);
   });
   pad.append(grid);
+
+  // 操作区：拨号键居中，退格在右。没有号码时退格整体隐藏，不留灰按钮占位。
   const actions = document.createElement('div');
   actions.className = 'keypad-actions';
   const dial = button('', 'keypad-dial');
-  dial.title = '呼叫';
+  dial.title = matched ? `呼叫 ${matched.title}` : '呼叫';
+  dial.setAttribute('aria-label', dial.title);
   dial.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z"/></svg>';
   dial.disabled = !matched;
   dial.addEventListener('click', () => {
@@ -1935,13 +1954,17 @@ function renderCallKeypad(body, shell) {
   });
   const back = button('', 'keypad-back');
   back.title = '删除';
-  back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 6h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9L4 12z"/><path d="m13 10 4 4m0-4-4 4"/></svg>';
-  back.disabled = !state.dialNumber;
+  back.setAttribute('aria-label', '删除一位');
+  back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9L4 12z"/><path d="m13 10 4 4m0-4-4 4"/></svg>';
+  back.hidden = !state.dialNumber;
   back.addEventListener('click', () => {
     state.dialNumber = state.dialNumber.slice(0, -1);
     renderCall();
   });
-  actions.append(document.createElement('span'), dial, back);
+  // 左列留空保持拨号键真正居中
+  const spacer = document.createElement('span');
+  spacer.className = 'keypad-spacer';
+  actions.append(spacer, dial, back);
   pad.append(actions);
   body.append(pad);
 }
@@ -1966,6 +1989,10 @@ function openCallView(shell, item) {
     background: state.callBackground || '',
     backdropHue: state.callBackdropHue ?? '',
     fluidCursor: state.fluidCursor !== false,
+    backdropDensity: state.backdropDensity ?? '',
+    backdropPattern: state.backdropPattern || '',
+    backdropShape: state.backdropShape || '',
+    fogColors: state.fogColors || '',
   };
   const startedAt = Date.now();
   shell.replaceChildren();
@@ -2266,6 +2293,63 @@ function applyAppBackground(value) {
   root.classList.remove('has-app-background');
 }
 
+// 光雾配色：三组预设 + 三个取色器，落盘为逗号分隔的 #rrggbb
+function fogColorPicker(current, onChange) {
+  const wrap = document.createElement('div');
+  wrap.className = 'fog-field';
+  const presets = [
+    ['', '场景默认'],
+    ['#8040C1,#7FD3CF', '青紫'],
+    ['#3D7FD6,#AFEEFF', '冰蓝'],
+    ['#C8452D,#E0A458', '暖橙'],
+    ['#203D27,#496F85', '深林'],
+  ];
+  const row = document.createElement('div');
+  row.className = 'background-scenes';
+  const parse = v => String(v || '').split(',').map(s => s.trim()).filter(Boolean);
+  let picked = parse(current);
+  const apply = async value => {
+    try {
+      await onChange(value);
+      picked = parse(value);
+      paint();
+      showMessage(value ? '光雾配色已更新' : '光雾恢复场景配色');
+    } catch (error) {
+      showError(error.message);
+    }
+  };
+  presets.forEach(([value, name]) => {
+    const chip = button(name, `scene-chip${(current || '') === value ? ' active' : ''}`);
+    if (value) {
+      const list = parse(value);
+      chip.style.borderColor = list[0];
+      chip.style.background = `linear-gradient(135deg, ${list.map(c => `${c}33`).join(', ')})`;
+    }
+    chip.addEventListener('click', () => apply(value));
+    row.append(chip);
+  });
+  // 自选两色
+  const customRow = document.createElement('div');
+  customRow.className = 'fog-custom';
+  const inputs = [];
+  const paint = () => {
+    inputs.forEach((input, i) => { input.value = picked[i] || (i === 0 ? '#8040C1' : '#7FD3CF'); });
+  };
+  for (let i = 0; i < 2; i++) {
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'fog-swatch';
+    input.setAttribute('aria-label', `光束颜色 ${i + 1}`);
+    inputs.push(input);
+  }
+  paint();
+  const useCustom = button('用这两色', 'button button-quiet button-small');
+  useCustom.addEventListener('click', () => apply(inputs.map(n => n.value).join(',')));
+  customRow.append(...inputs, useCustom);
+  wrap.append(row, customRow);
+  return wrap;
+}
+
 // 自绘图案：一块小画板，用户画出的笔迹会被点云采样成形状。
 // 1:1 跟手（Pointer Events），按下即落笔，不等 click。
 function patternPad(current, onChange) {
@@ -2369,9 +2453,45 @@ function patternPad(current, onChange) {
     }
   });
   actions.append(apply, clear, remove);
+  // 导入图片作为图案：直接复用同一条采样链路，点云按图片明暗汇聚
+  const importFile = document.createElement('input');
+  importFile.type = 'file';
+  importFile.accept = 'image/*';
+  importFile.hidden = true;
+  importFile.addEventListener('change', async () => {
+    const picked = importFile.files?.[0];
+    importFile.value = '';
+    if (!picked) return;
+    if (picked.size > 4 * 1024 * 1024) { showError('图片超过 4MB，请先压缩'); return; }
+    try {
+      const url = await readFileAsDataUrl(picked);
+      // 画到画板上，用户还能在图片基础上继续涂改
+      const bmp = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = () => reject(new Error('图片无法解析'));
+        im.src = url;
+      });
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 256, 256);
+      const s = Math.min(256 / bmp.width, 256 / bmp.height);
+      const dw = bmp.width * s, dh = bmp.height * s;
+      ctx.drawImage(bmp, (256 - dw) / 2, (256 - dh) / 2, dw, dh);
+      ctx.strokeStyle = '#FFFFFF';
+      const value = canvas.toDataURL('image/png');
+      await onChange(value);
+      paintThumb(value);
+      showMessage('已用这张图片作为点云图案');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+  const importBtn = button('导入图片…', 'button button-quiet button-small');
+  importBtn.addEventListener('click', () => importFile.click());
+  actions.append(importBtn, importFile);
   const tip = document.createElement('p');
   tip.className = 'settings-note';
-  tip.textContent = '在黑底上画白色笔迹，点云会按笔迹聚成这个形状，并带上倒影。';
+  tip.textContent = '在黑底上画白色笔迹，或导入一张图片；点云会按明暗分布汇聚成该形状，并带上倒影。';
   panel.append(canvas, tip, actions);
 
   const setOpen = open => {
@@ -2806,60 +2926,122 @@ async function renderSettings() {
       return window.desktop.app.settings.save({ callBackground: value });
     }, { scenes: true, media: true, html: true }),
   );
-  // 动效场景的调色环：只在选了内置场景时才有意义，所以给出说明而不是隐藏控件。
-  const hueField = document.createElement('div');
-  hueField.className = 'background-field';
-  const hueTitle = document.createElement('span');
-  hueTitle.className = 'background-title';
-  hueTitle.textContent = '动效配色';
-  const hueNote = document.createElement('p');
-  hueNote.className = 'settings-note';
-  hueNote.textContent = '拖动色环给内置动效场景换一套同色系配色，留空则用场景自带配色。';
-  let hueTimer = 0;
-  hueField.append(hueTitle, hueNote, hueRing(state.callBackdropHue, (hue, commit) => {
-    state.callBackdropHue = hue;
-    if (!commit) return;
-    clearTimeout(hueTimer);
-    hueTimer = setTimeout(() => {
-      window.desktop.app.settings.save({ callBackdropHue: hue }).catch(error => showError(error.message));
-    }, 120);
-  }));
-  backgroundCard.append(hueField);
-  // 粒子密度：对粒子雨与点云同时生效
-  const densityField = document.createElement('div');
-  densityField.className = 'background-field';
-  const densityTitle = document.createElement('span');
-  densityTitle.className = 'background-title';
-  densityTitle.textContent = '粒子密度';
-  const densityNote = document.createElement('p');
-  densityNote.className = 'settings-note';
-  densityNote.textContent = '调整粒子雨与点云的疏密，低端设备会在此基础上自动降档。';
-  densityField.append(densityTitle, densityNote, densitySlider(state.backdropDensity, value => {
-    state.backdropDensity = value;
-    window.desktop.app.settings.save({ backdropDensity: value }).catch(error => showError(error.message));
-  }));
-  backgroundCard.append(densityField);
-  // 点云自绘图案
-  const patternField = document.createElement('div');
-  patternField.className = 'background-field';
-  const patternTitle = document.createElement('span');
-  patternTitle.className = 'background-title';
-  patternTitle.textContent = '点云图案';
-  patternField.append(patternTitle, patternPad(state.backdropPattern, async value => {
-    state.backdropPattern = value;
-    await window.desktop.app.settings.save({ backdropPattern: value });
-  }));
-  backgroundCard.append(patternField);
-  // 流体光标扰动开关
-  backgroundCard.append(prefRow(
-    '流体光标扰动',
-    '鼠标掠过时把背景粒子柔和推开，停下后缓慢回流。',
-    state.fluidCursor !== false,
-    async next => {
-      state.fluidCursor = next;
-      await window.desktop.app.settings.save({ fluidCursor: next });
-    },
-  ));
+  // ── 动效场景的专属选项：只在选中对应风格时才出现 ──
+  // 当前通话背景是不是内置动效场景、是哪一种，决定下面显示哪些控件。
+  const activeScene = /^scene:/.test(state.callBackground || '') ? state.callBackground.slice(6) : '';
+  const isCloud = activeScene === 'point-cloud';
+  const isParticle = activeScene === 'particle-rain' || isCloud || activeScene === 'aurora-fog';
+
+  if (activeScene) {
+    // 动效配色（所有内置场景都适用）
+    const hueField = document.createElement('div');
+    hueField.className = 'background-field';
+    const hueTitle = document.createElement('span');
+    hueTitle.className = 'background-title';
+    hueTitle.textContent = '动效配色';
+    const hueNote = document.createElement('p');
+    hueNote.className = 'settings-note';
+    hueNote.textContent = '拖动色环给当前动效场景换一套同色系配色，留空则用场景自带配色。';
+    let hueTimer = 0;
+    hueField.append(hueTitle, hueNote, hueRing(state.callBackdropHue, (hue, commit) => {
+      state.callBackdropHue = hue;
+      if (!commit) return;
+      clearTimeout(hueTimer);
+      hueTimer = setTimeout(() => {
+        window.desktop.app.settings.save({ callBackdropHue: hue }).catch(error => showError(error.message));
+      }, 120);
+    }));
+    backgroundCard.append(hueField);
+  }
+
+  if (isParticle) {
+    // 粒子密度：粒子雨与点云都按这个倍率
+    const densityField = document.createElement('div');
+    densityField.className = 'background-field';
+    const densityTitle = document.createElement('span');
+    densityTitle.className = 'background-title';
+    densityTitle.textContent = '粒子密度';
+    const densityNote = document.createElement('p');
+    densityNote.className = 'settings-note';
+    densityNote.textContent = '调整粒子的疏密，低端设备会在此基础上自动降档。';
+    densityField.append(densityTitle, densityNote, densitySlider(state.backdropDensity, value => {
+      state.backdropDensity = value;
+      window.desktop.app.settings.save({ backdropDensity: value }).catch(error => showError(error.message));
+    }));
+    backgroundCard.append(densityField);
+  }
+
+  if (isCloud) {
+    // 点云形态：内置树状 / 极光，或自定义图案
+    const shapeField = document.createElement('div');
+    shapeField.className = 'background-field';
+    const shapeTitle = document.createElement('span');
+    shapeTitle.className = 'background-title';
+    shapeTitle.textContent = '点云形态';
+    const shapeNote = document.createElement('p');
+    shapeNote.className = 'settings-note';
+    shapeNote.textContent = '让点云汇聚成指定形体；选了自定义图案时以图案为准。';
+    const shapeRow = document.createElement('div');
+    shapeRow.className = 'background-scenes';
+    [['', '自然起伏'], ['tree', '树状'], ['aurora', '极光']].forEach(([value, name]) => {
+      const chip = button(name, `scene-chip${(state.backdropShape || '') === value ? ' active' : ''}`);
+      chip.addEventListener('click', async () => {
+        try {
+          await window.desktop.app.settings.save({ backdropShape: value });
+          state.backdropShape = value;
+          showMessage(value ? `点云已切换为${name}` : '点云恢复自然起伏');
+          renderSettings();
+        } catch (error) {
+          showError(error.message);
+        }
+      });
+      shapeRow.append(chip);
+    });
+    shapeField.append(shapeTitle, shapeNote, shapeRow);
+    backgroundCard.append(shapeField);
+
+    // 自定义图案：手绘或导入图片
+    const patternField = document.createElement('div');
+    patternField.className = 'background-field';
+    const patternTitle = document.createElement('span');
+    patternTitle.className = 'background-title';
+    patternTitle.textContent = '自定义图案';
+    patternField.append(patternTitle, patternPad(state.backdropPattern, async value => {
+      state.backdropPattern = value;
+      await window.desktop.app.settings.save({ backdropPattern: value });
+    }));
+    backgroundCard.append(patternField);
+  }
+
+  if (activeScene === 'aurora-fog') {
+    // 体积光雾专属：光束配色自定义
+    const fogField = document.createElement('div');
+    fogField.className = 'background-field';
+    const fogTitle = document.createElement('span');
+    fogTitle.className = 'background-title';
+    fogTitle.textContent = '光雾配色';
+    const fogNote = document.createElement('p');
+    fogNote.className = 'settings-note';
+    fogNote.textContent = '挑一组光束颜色，或自己选色；留空用场景自带的青绿与粉紫。';
+    fogField.append(fogTitle, fogNote, fogColorPicker(state.fogColors, async value => {
+      state.fogColors = value;
+      await window.desktop.app.settings.save({ fogColors: value });
+    }));
+    backgroundCard.append(fogField);
+  }
+
+  if (activeScene) {
+    // 流体光标扰动开关
+    backgroundCard.append(prefRow(
+      '流体光标扰动',
+      '鼠标掠过时把背景粒子柔和推开，停下后缓慢回流。',
+      state.fluidCursor !== false,
+      async next => {
+        state.fluidCursor = next;
+        await window.desktop.app.settings.save({ fluidCursor: next });
+      },
+    ));
+  }
   content.append(backgroundCard);
 
   // 供应商并入设置，这里只留一个入口。
@@ -3305,10 +3487,18 @@ document.documentElement.dataset.theme = 'mono-light';
       ctx.fill();
     }
     ctx.restore();
-    if (out >= 1) { veil.remove(); window.removeEventListener('resize', size); return; }
+    if (out >= 1) { cleanup(); return; }
     veil.style.opacity = String(1 - out);
     requestAnimationFrame(tick);
   };
+  // 兜底：窗口在后台时 rAF 会被节流甚至停摆，遮罩不能因此一直盖着页面。
+  // 用挂钟定时器保证到点必退场。
+  const cleanup = () => {
+    clearTimeout(failsafe);
+    window.removeEventListener('resize', size);
+    veil.remove();
+  };
+  const failsafe = setTimeout(cleanup, HOLD + FADE + 400);
   window.addEventListener('resize', size);
   requestAnimationFrame(tick);
 })();
@@ -3367,6 +3557,8 @@ async function bootstrapUi() {
     state.fluidCursor = settings?.fluidCursor !== false;
     state.backdropDensity = settings?.backdropDensity ?? '';
     state.backdropPattern = settings?.backdropPattern || '';
+    state.backdropShape = settings?.backdropShape || '';
+    state.fogColors = settings?.fogColors || '';
     state.themeHue = settings?.themeHue ?? '';
     state.appBackground = settings?.appBackground || '';
     applyThemeHue(state.themeHue);
