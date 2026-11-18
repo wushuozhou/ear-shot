@@ -35,7 +35,8 @@ const SHAPES = {
         grow(x2, y2, angle + (Math.random() - 0.5) * 0.5, len * shrink * 0.8, width * 0.5, depth + 2);
       }
     };
-    grow(0, 0.98, Math.PI / 2, 0.2, 0.055, 0);
+    // 主干要足够长：首次分叉点落在画面中段，树形才立得住、不像灌木
+    grow(0, 0.98, Math.PI / 2, 0.3, 0.055, 0);
     const total = branches.reduce((s, b) => s + Math.hypot(b.x2 - b.x1, b.y2 - b.y1) * (1 + b.depth * 0.5), 0) || 1;
     for (let i = 0; i < count; i++) {
       // 按长度加权挑一段枝，越细的枝分到越多点 → 冠层自然浓密
