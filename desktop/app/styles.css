@@ -66,11 +66,87 @@
 }
 
 * { box-sizing: border-box; }
+/* 视口锁定高度：滚动必须发生在 .content 内部。
+   过去 .shell 只有 min-height 没有 height，弹性子项高度不受约束，
+   .content 的 overflow:auto 失去参照，整页被撑高由窗口滚动，
+   侧边栏也被拉到同样高度、滚动时整块跑出视口。 */
+html, body { height: 100%; overflow: hidden; }
 body { margin: 0; min-width: 1024px; min-height: 700px; background: var(--bg); }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
-.shell { display: flex; min-height: 100vh; }
+.shell { height: 100vh; min-height: 0; display: flex; overflow: hidden; }
 .sidebar { position: relative; width: 220px; min-width: 0; flex: 0 0 auto; overflow: hidden; padding: 24px 14px 18px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); transition: width .2s ease, padding .2s ease; }
+/* ── 滚动联动：--scroll-p 进度 0..1，--scroll-v 速度 0..1（由 app.js 写入）──
+   叠层速率沿用复用清单：氛围层 0.15（最慢的中景），导航 0.35，品牌 0.2。
+   只动 transform / opacity / filter，不触发重排。 */
+.sidebar { --scroll-p: 0; --scroll-v: 0; }
+.sidebar-aura {
+  position: absolute; inset: -20% -40% -20% -40%; z-index: 0; pointer-events: none;
+  /* 两团光随进度上下错位漂移，像镜头从点云空间平移到光雾空间 */
+  background:
+    radial-gradient(42% 30% at 50% calc(18% + var(--scroll-p) * 52%),
+      color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%),
+    radial-gradient(38% 26% at 50% calc(92% - var(--scroll-p) * 58%),
+      color-mix(in srgb, var(--focus) 20%, transparent), transparent 72%);
+  opacity: calc(.26 + var(--scroll-v) * .5);
+  /* 0.15 速率的中景视差 + 速度越快越虚，模拟运动模糊 */
+  transform: translate3d(0, calc(var(--scroll-p) * -15%), 0) scale(calc(1 + var(--scroll-v) * .06));
+  filter: blur(calc(18px + var(--scroll-v) * 14px)) saturate(calc(1 + var(--scroll-v) * .5));
+  transition: opacity .6s cubic-bezier(.22,1,.36,1), filter .6s cubic-bezier(.22,1,.36,1);
+  will-change: transform, opacity;
+}
+/* 品牌区 0.2 速率：滚动时轻微上浮并收紧字距 */
+.brand {
+  transform: translate3d(0, calc(var(--scroll-p) * -4px), 0);
+  transition: transform .6s cubic-bezier(.22,1,.36,1);
+}
+/* 导航组 0.35 速率；速度越高整体越"贴紧"，停下回正 */
+.nav {
+  position: relative; z-index: 1;
+  transform: translate3d(0, calc(var(--scroll-p) * -7px), 0);
+  transition: transform .6s cubic-bezier(.22,1,.36,1);
+}
+/* 当前项的辉光随滚动加强：越往下读，当前位置越明确 */
+.nav-card.active {
+  box-shadow:
+    inset 3px 0 var(--accent),
+    0 0 calc(var(--scroll-v) * 18px) color-mix(in srgb, var(--accent) calc(var(--scroll-v) * 45%), transparent);
+  transition: box-shadow .5s cubic-bezier(.22,1,.36,1);
+}
+/* 右缘进度轨：滚动到哪一段一目了然 */
+.sidebar-rail {
+  position: absolute; z-index: 2; top: 0; right: 0; bottom: 0; width: 2px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  opacity: calc(.35 + var(--scroll-v) * .65);
+  transition: opacity .5s cubic-bezier(.22,1,.36,1);
+  pointer-events: none;
+}
+.sidebar-rail i {
+  position: absolute; inset: 0; display: block; transform-origin: top center;
+  background: linear-gradient(180deg, var(--accent), var(--focus));
+  box-shadow: 0 0 calc(4px + var(--scroll-v) * 10px) color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: transform .35s cubic-bezier(.22,1,.36,1), box-shadow .5s cubic-bezier(.22,1,.36,1);
+}
+/* 内容区与侧栏之间的边界：滚动时浮现一层扫光，替代硬分割线 */
+.sidebar::after {
+  content: ''; position: absolute; z-index: 3; top: 0; right: -1px; bottom: 0; width: 1px;
+  background: linear-gradient(180deg,
+    transparent,
+    color-mix(in srgb, var(--accent) calc(40% + var(--scroll-v) * 50%), transparent) calc(var(--scroll-p) * 100%),
+    transparent);
+  opacity: calc(.4 + var(--scroll-v) * .6);
+  pointer-events: none;
+  transition: opacity .5s cubic-bezier(.22,1,.36,1);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* 降级：保留进度轨这一帧最有信息量的反馈，去掉视差、模糊与位移 */
+  .sidebar-aura { display: none; }
+  .brand, .nav { transform: none !important; transition: none; }
+  .nav-card.active { box-shadow: inset 3px 0 var(--accent); }
+  .sidebar-rail { opacity: .6; }
+  .sidebar-rail i { transition: transform .2s linear; box-shadow: none; }
+  .sidebar::after { display: none; }
+}
 /* 收起后只剩图标。overflow:hidden + min-width:0 防止内部文字把宽度顶回去。 */
 .shell.sidebar-collapsed .sidebar { width: 64px; padding-left: 8px; padding-right: 8px; }
 .sidebar-toggle { position: absolute; top: 20px; right: 8px; z-index: 5; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 50%; color: var(--muted); background: var(--panel); cursor: pointer; }
@@ -146,6 +222,10 @@ button { cursor: pointer; }
 .shell.sidebar-collapsed .nav-label,
 .shell.sidebar-collapsed .nav-back,
 .shell.sidebar-collapsed .nav-tag { display: none; }
+/* 收起态只剩图标：免除滚动视差位移，避免图标偏离中线 */
+.shell.sidebar-collapsed .brand,
+.shell.sidebar-collapsed .nav { transform: none; }
+.shell.sidebar-collapsed .sidebar-aura { opacity: calc(.18 + var(--scroll-v) * .3); }
 @media (prefers-reduced-motion: reduce) {
   .nav-card, .nav-front, .nav-back, .nav-tag { transition: none !important; }
   .nav-card:hover { transform: none; }
@@ -251,7 +331,8 @@ select:focus, input:focus, textarea:focus { border-color: var(--focus); box-shad
   .provider-grid { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
 }
 
-.conversation-layout { height: calc(100vh - 62px); display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
+/* 顶栏已移除，聊天区直接填满内容高度（旧值 100vh-62px 会溢出） */
+.conversation-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
 .conversation-list { min-width: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .conversation-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .conversation-list-head strong { font-size: 13px; }

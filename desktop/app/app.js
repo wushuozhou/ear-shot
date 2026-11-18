@@ -3503,6 +3503,100 @@ document.documentElement.dataset.theme = 'mono-light';
   requestAnimationFrame(tick);
 })();
 
+// ── 侧边栏滚动联动（S04 滚动章节转场 / S08 滚动即运镜）──
+// 内容在 .content 内滚动，把滚动进度与速度写进 CSS 变量，让侧边栏跟着"呼吸"：
+//   · 氛围层按 0.15 速率做中景视差（复用清单里最慢的一层）
+//   · 进度条随滚动充盈，当前导航项辉光随之加强
+//   · 速度驱动一点点倾斜与色相偏移，停下即回正（600ms 参数插值）
+// 只写 CSS 变量 + transform/opacity，不触发重排；单个 rAF 循环。
+(() => {
+  const shell = document.querySelector('.shell');
+  const sidebar = document.querySelector('.sidebar');
+  if (!shell || !sidebar) return;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 氛围层：垫在侧边栏内容之下，随滚动缓慢漂移
+  const aura = document.createElement('div');
+  aura.className = 'sidebar-aura';
+  aura.setAttribute('aria-hidden', 'true');
+  sidebar.prepend(aura);
+  // 滚动进度轨：贴在侧边栏右缘
+  const rail = document.createElement('div');
+  rail.className = 'sidebar-rail';
+  rail.setAttribute('aria-hidden', 'true');
+  const railFill = document.createElement('i');
+  rail.append(railFill);
+  sidebar.append(rail);
+
+  let target = { p: 0, v: 0 };     // 目标进度与速度
+  let shown = { p: 0, v: 0 };      // 实际展示值（朝目标插值，天然可中断）
+  let raf = 0, lastTop = 0, lastT = 0;
+  let activeScroller = null;       // 当前真正在滚的容器
+
+  const read = () => {
+    const el = activeScroller || document.querySelector('.content');
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    const top = el.scrollTop;
+    const now = performance.now();
+    // 首次进入不计速度（没有前一帧可比），之后用真实间隔
+    const dt = lastT ? Math.max(8, now - lastT) : 0;
+    target.p = max > 2 ? Math.min(1, top / max) : 0;
+    if (dt > 0) {
+      // 速度归一化：约 0.9 屏/秒即算满速，贴近真实滚轮与触控板力度
+      const vRaw = Math.abs(top - lastTop) / dt * 1000 / Math.max(1, el.clientHeight * 0.9);
+      // 取峰值保持：tick 的衰减不能把刚采到的这一下抹掉
+      target.v = Math.min(1, Math.max(target.v, vRaw));
+    }
+    lastTop = top; lastT = now;
+    if (!raf) raf = requestAnimationFrame(tick);
+  };
+
+  const tick = () => {
+    // 从当前展示值朝目标插值：手势随时改向都不会跳变
+    shown.p += (target.p - shown.p) * 0.18;
+    // 速度上升快、回落慢：抬手后留一点余韵，符合"惯性"观感
+    shown.v += (target.v - shown.v) * (target.v > shown.v ? 0.55 : 0.07);
+    target.v *= 0.94;                      // 没有新滚动就自然衰减回零
+    const p = Math.round(shown.p * 1000) / 1000;
+    const v = Math.round(shown.v * 1000) / 1000;
+    sidebar.style.setProperty('--scroll-p', String(p));
+    sidebar.style.setProperty('--scroll-v', String(v));
+    railFill.style.transform = `scaleY(${Math.max(0.02, p)})`;
+    const settled = Math.abs(target.p - shown.p) < 0.001 && shown.v < 0.004;
+    if (settled) { shown.v = 0; sidebar.style.setProperty('--scroll-v', '0'); raf = 0; return; }
+    raf = requestAnimationFrame(tick);
+  };
+
+  // 滚动容器每次路由切换都会重建，用事件委托监听。
+  // 聊天页滚动发生在 .message-stream，设置/收藏等页在 .content，两者都算。
+  const isScroller = el => el instanceof Element
+    && (el.classList.contains('content') || el.classList.contains('message-stream'));
+  document.addEventListener('scroll', event => {
+    if (!isScroller(event.target)) return;
+    if (reduced) {
+      // 降级：只更新进度，不做视差与倾斜
+      const el = event.target;
+      const max = el.scrollHeight - el.clientHeight;
+      const p = max > 2 ? Math.min(1, el.scrollTop / max) : 0;
+      sidebar.style.setProperty('--scroll-p', String(p));
+      sidebar.style.setProperty('--scroll-v', '0');
+      railFill.style.transform = `scaleY(${Math.max(0.02, p)})`;
+      return;
+    }
+    activeScroller = event.target;
+    read();
+  }, true);
+  // 路由切换后重置基准，避免把"换页"误当成一次高速滚动
+  window.addEventListener('hashchange', () => {
+    lastTop = 0; lastT = 0; activeScroller = null;
+    target = { p: 0, v: 0 }; shown = { p: 0, v: 0 };
+    sidebar.style.setProperty('--scroll-p', '0');
+    sidebar.style.setProperty('--scroll-v', '0');
+    railFill.style.transform = 'scaleY(0.02)';
+  });
+})();
+
 // 侧边栏收起/展开，状态记在本地，下次打开保持。
 const SIDEBAR_KEY = 'earshot:sidebar-collapsed';
 function applySidebarCollapsed(collapsed) {
