@@ -22,6 +22,7 @@ const state = {
   selectMode: false,
   selected: new Set(),
   recording: null,
+  recordingPending: false,
   quote: null,
   aiVoiceReply: false,
   visionEnabled: false,
@@ -39,9 +40,11 @@ const state = {
   callLog: [],
   callTab: 'recents',
   dialNumber: '',
-  // 切换联系人时置 true，由 renderConversationMessages 消费一次，播放气泡依次落位。
-  enterAnimation: false,
+  conversationSearch: '',
+  mobileChat: false,
+  scrollToLatest: false,
 };
+const conversationDrafts = new Map();
 
 const ACTIVE_CONVERSATION_KEY = 'earshot:active-conversation';
 const AVATAR_PRESETS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'preset-6'];
@@ -75,13 +78,20 @@ function rememberedConversationId() {
 // 切换联系人：加载该联系人自己的聊天记录，并中断上一轮的流式状态。
 async function selectConversation(id) {
   if (!id) return;
+  if (state.recording || state.recordingPending) throw new Error('请等待语音发送完成再切换联系人');
   const conversation = await window.desktop.agent.conversationLoad(id);
+  if (state.currentConversation) conversationDrafts.set(state.currentConversation.id, { text: state.draft, quote: state.quote });
+  if (state.agentTicketId) await window.desktop.agent.chatAbort(state.agentTicketId);
   state.currentConversation = conversation;
   state.agentBusy = false;
   state.agentTicketId = '';
   state.streamingText = '';
-  state.draft = '';
-  state.enterAnimation = true;
+  const draft = conversationDrafts.get(id);
+  state.draft = draft?.text || '';
+  state.quote = draft?.quote || null;
+  state.selectMode = false;
+  state.selected.clear();
+  state.scrollToLatest = true;
   rememberActiveConversation(conversation.id);
   return conversation;
 }
@@ -264,7 +274,16 @@ function renderTop() {
 }
 
 function setActiveNav(route) {
-  document.querySelectorAll('.nav a').forEach(link => link.classList.toggle('active', link.dataset.route === route));
+  document.querySelectorAll('.nav a').forEach(link => {
+    const active = link.dataset.route === route;
+    link.classList.toggle('active', active);
+    if (active) {
+      link.setAttribute('aria-current', 'page');
+      const lens = $('.nav-current');
+      if (lens) lens.style.transform = matchMedia('(max-width: 600px)').matches
+        ? `translateX(${link.offsetLeft}px)` : `translateY(${link.offsetTop}px)`;
+    } else link.removeAttribute('aria-current');
+  });
 }
 
 function button(text, className = 'button button-quiet') {
@@ -278,6 +297,7 @@ function button(text, className = 'button button-quiet') {
 function iconButton(title, path, className = 'icon-button') {
   const item = button('', className);
   item.title = title;
+  item.setAttribute('aria-label', title);
   item.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${path}</svg>`;
   return item;
 }
@@ -684,15 +704,22 @@ function attachmentBubble(message) {
   return file;
 }
 
-function renderConversationMessages() {
+function renderConversationMessages(streamingOnly = false) {
   const stream = $('#message-stream');
   if (!stream) return;
+  const previous = { top: stream.scrollTop, height: stream.scrollHeight, viewport: stream.clientHeight };
+  const streamingRow = stream.querySelector('[data-streaming]');
+  if (streamingOnly && streamingRow) {
+    streamingRow.querySelector('.message-bubble').innerHTML = renderMarkdown(stripStageDirections(state.streamingText));
+    stream.scrollTop = chatUi.scrollTarget(previous, stream.scrollHeight);
+    return;
+  }
   stream.replaceChildren();
   const messages = state.currentConversation?.messages || [];
   if (onboardingNeeded()) {
     const empty = document.createElement('div');
     empty.className = 'message-empty';
-    empty.innerHTML = '<div><strong>先完成首次设置</strong>请先到「设置 → 供应商」选择套餐、填写 Key 并测试连接，完成后就可以开始聊天。</div>';
+    empty.innerHTML = '<div><strong>连接模型后开始聊天</strong><a href="#/providers">前往连接设置</a></div>';
     stream.append(empty);
     return;
   }
@@ -723,7 +750,12 @@ function renderConversationMessages() {
     const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar');
     if (role === 'user') row.append(bubble, avatar);
     else row.append(avatar, bubble);
-    if (streaming || !message.id) return row;
+    if (streaming) {
+      row.dataset.streaming = 'true';
+      if (!message.content) bubble.innerHTML = '<span class="typing-dots" aria-label="正在回复"><i></i><i></i><i></i></span>';
+      return row;
+    }
+    if (!message.id) return row;
     // 多选时整行可勾选；非多选时左键/右键都弹出微信式操作菜单。
     if (state.selectMode) {
       row.classList.add('selectable');
@@ -745,46 +777,75 @@ function renderConversationMessages() {
       event.stopPropagation();
       openMessageMenu(message, event.clientX, event.clientY, bubble.getBoundingClientRect());
     };
-    bubble.addEventListener('click', openMenu);
+    bubble.tabIndex = 0;
+    bubble.setAttribute('aria-label', `${role === 'user' ? '我' : '对方'}的消息，按菜单键查看操作`);
+    bubble.addEventListener('keydown', event => {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        const rect = bubble.getBoundingClientRect();
+        event.preventDefault();
+        openMessageMenu(message, rect.left + rect.width / 2, rect.top, rect);
+        $('.message-menu button')?.focus();
+      }
+    });
+    bubble.addEventListener('click', event => {
+      if (event.target.closest('a, button, video, audio') || window.getSelection()?.toString()) return;
+      openMenu(event);
+    });
     row.addEventListener('contextmenu', openMenu);
     return row;
   };
-  if (!messages.length && !state.streamingText) {
+  if (!messages.length && !state.streamingText && !state.agentBusy) {
     const empty = document.createElement('div');
     empty.className = 'message-empty';
     empty.innerHTML = state.currentConversation
-      ? '<div><strong>先聊点什么吧</strong>这个联系人还没有聊天记录，在下面输入第一句话。</div>'
-      : '<div><strong>还没有联系人</strong>点击左侧「新建」创建一个联系人后开始聊天。</div>';
+      ? '<div><strong>开始聊天</strong></div>'
+      : '<div><strong>选择一个联系人</strong></div>';
     stream.append(empty);
   } else {
-    const rows = messages.map(message => rowFor(message));
-    rows.forEach(row => stream.append(row));
-    if (state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
-    // 切换联系人时按时间轴依次落位：单枚 0.26s、间隔 60ms，整组约 0.6s 收完。
-    // 所有消息最终都保持 1.0 不透明度——历史记录不该被压暗，读起来才完整。
-    if (state.enterAnimation && rows.length) {
-      state.enterAnimation = false;
-      const tail = rows.slice(-6);
-      const gap = Math.min(60, 360 / Math.max(1, tail.length));
-      tail.forEach(row => row.classList.add('msg-enter'));
-      // 强制一次样式计算把起始态落定，再调度落位。
-      // 不用 requestAnimationFrame：窗口在后台时 rAF 会被节流，动画会迟迟不启动甚至看起来卡住。
-      void stream.offsetHeight;
-      tail.forEach((row, index) => {
-        setTimeout(() => {
-          row.classList.add('msg-in');
-          // 入场结束后撤掉 will-change，避免长期占着合成层
-          setTimeout(() => row.classList.remove('msg-enter'), 260);
-        }, index * gap);
-      });
-    }
+    let lastTime = '';
+    messages.forEach(message => {
+      if (chatUi.startsTimeGroup(message.createdAt, lastTime)) {
+        const time = document.createElement('time');
+        time.className = 'message-time';
+        time.dateTime = message.createdAt;
+        time.textContent = chatUi.timeLabel(message.createdAt);
+        stream.append(time);
+      }
+      if (message.createdAt) lastTime = message.createdAt;
+      stream.append(rowFor(message));
+    });
+    if (state.agentBusy || state.streamingText) stream.append(rowFor({ role: 'assistant', kind: 'text', content: state.streamingText }, true));
   }
-  stream.scrollTop = stream.scrollHeight;
+  stream.scrollTop = chatUi.scrollTarget(previous, stream.scrollHeight, state.scrollToLatest);
+  state.scrollToLatest = false;
 }
 
 // 微信式气泡菜单：复制 / 收藏 / 引用 / 多选 / 删除。
 function closeMessageMenu() {
-  document.querySelectorAll('.message-menu').forEach(node => node.remove());
+  document.querySelectorAll('.message-menu, .conversation-menu').forEach(node => node.remove());
+  document.querySelectorAll('[aria-controls="conversation-menu"]').forEach(node => node.setAttribute('aria-expanded', 'false'));
+}
+
+function openConversationMenu(trigger) {
+  const wasOpen = !!$('#conversation-menu');
+  closeMessageMenu();
+  if (wasOpen) return;
+  const menu = document.createElement('div');
+  menu.id = 'conversation-menu';
+  menu.className = 'conversation-menu';
+  menu.setAttribute('aria-label', '聊天操作');
+  const edit = button('联系人设置');
+  const clear = button('清空聊天记录', 'danger');
+  clear.disabled = !(state.currentConversation?.messages || []).length;
+  edit.addEventListener('click', () => { closeMessageMenu(); openConversationEditor(state.currentConversation); });
+  clear.addEventListener('click', () => { closeMessageMenu(); openClearConfirm(state.currentConversation); });
+  menu.append(edit, clear);
+  document.body.append(menu);
+  const rect = trigger.getBoundingClientRect();
+  menu.style.top = `${Math.min(rect.bottom + 8, innerHeight - menu.offsetHeight - 8)}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+  trigger.setAttribute('aria-expanded', 'true');
+  edit.focus();
 }
 
 function openMessageMenu(message, x, y, bubbleRect = null) {
@@ -847,14 +908,20 @@ function openMessageMenu(message, x, y, bubbleRect = null) {
 }
 
 document.addEventListener('pointerdown', event => {
-  if (!event.target.closest('.message-menu')) closeMessageMenu();
+  if (!event.target.closest('.message-menu, .conversation-menu, [aria-controls="conversation-menu"]')) closeMessageMenu();
 }, true);
+document.addEventListener('scroll', closeMessageMenu, true);
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeMessageMenu();
+  if (event.key === 'Escape') {
+    const trigger = $('[aria-controls="conversation-menu"][aria-expanded="true"]');
+    closeMessageMenu();
+    trigger?.focus();
+  }
 });
 
 async function deleteSingleMessage(message) {
   if (!state.currentConversation || !message?.id) return;
+  if (!window.confirm('删除这条消息？删除后无法恢复。')) return;
   try {
     const updated = await window.desktop.agent.messageDelete(state.currentConversation.id, message.id);
     state.currentConversation = updated;
@@ -891,21 +958,29 @@ async function favoriteMessages(messages) {
 }
 
 function renderConversation() {
+  const oldStream = $('#message-stream');
+  const oldScroll = oldStream && oldStream.dataset.conversation === state.currentConversation?.id
+    ? { top: oldStream.scrollTop, height: oldStream.scrollHeight, viewport: oldStream.clientHeight } : null;
+  const hadFocus = document.activeElement?.matches('.message-form textarea');
+  const caret = hadFocus ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  closeMessageMenu();
+  content.classList.add('chat-content');
   content.replaceChildren();
   const layout = document.createElement('div');
-  layout.className = 'conversation-layout';
+  layout.className = `conversation-layout${state.mobileChat ? ' mobile-chat' : ''}`;
   const list = document.createElement('aside');
   list.className = 'conversation-list';
   const listHead = document.createElement('div');
   listHead.className = 'conversation-list-head';
   const listTitle = document.createElement('strong');
-  listTitle.textContent = '联系人';
-  const newConversation = button('新建', 'button button-quiet button-small');
+  listTitle.textContent = '聊天';
+  const newConversation = iconButton('新建联系人', '<path d="M12 5v14M5 12h14"/>');
   newConversation.addEventListener('click', async () => {
     try {
       const created = await window.desktop.agent.conversationNew('新对话');
       await reloadConversations();
       await selectConversation(created.id);
+      state.mobileChat = true;
       renderConversation();
       openConversationEditor(state.currentConversation);
     } catch (error) {
@@ -914,12 +989,22 @@ function renderConversation() {
   });
   listHead.append(listTitle, newConversation);
   list.append(listHead);
+  const search = document.createElement('label');
+  search.className = 'conversation-search';
+  search.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.placeholder = '搜索';
+  searchInput.setAttribute('aria-label', '搜索联系人姓名或号码');
+  searchInput.value = state.conversationSearch;
+  search.append(searchInput);
+  list.append(search);
   const items = document.createElement('div');
   items.className = 'conversation-items';
   if (!state.conversations.length) {
     const empty = document.createElement('div');
     empty.className = 'conversation-empty';
-    empty.textContent = '还没有联系人。点击“新建”设置名字、头像和号码。';
+    empty.textContent = '点击右上角 + 添加联系人';
     items.append(empty);
   }
   state.conversations.forEach(item => {
@@ -927,6 +1012,7 @@ function renderConversation() {
     itemRow.className = 'conversation-item-row';
     const active = item.id === state.currentConversation?.id;
     const row = button('', `conversation-item${active ? ' active' : ''}`);
+    row.setAttribute('aria-current', active ? 'true' : 'false');
     row.title = item.title || '新对话';
     row.append(avatarNode(conversationAvatar(item), 'conversation-avatar'));
     const body = document.createElement('span');
@@ -937,16 +1023,27 @@ function renderConversation() {
     const sub = document.createElement('span');
     sub.className = 'conversation-item-sub';
     sub.textContent = item.preview || '';
-    body.append(name, sub);
+    const line = document.createElement('span');
+    line.className = 'conversation-item-line';
+    const time = document.createElement('time');
+    time.className = 'conversation-item-time';
+    time.textContent = chatUi.timeLabel(item.updatedAt).replace(/^(昨天) .*/, '$1');
+    line.append(name, time);
+    body.append(line, sub);
     row.append(body);
     row.addEventListener('click', async () => {
       if (itemRow.classList.contains('expanded')) {
         itemRow.classList.remove('expanded');
         return;
       }
-      if (item.id === state.currentConversation?.id) return;
+      if (item.id === state.currentConversation?.id) {
+        state.mobileChat = true;
+        layout.classList.add('mobile-chat');
+        return;
+      }
       try {
         await selectConversation(item.id);
+        state.mobileChat = true;
         renderConversation();
       } catch (error) {
         showError(error.message);
@@ -981,8 +1078,27 @@ function renderConversation() {
     actions.append(clear, remove);
     itemRow.append(row, actions);
     attachSwipe(itemRow, items);
+    itemRow.dataset.contactId = item.id;
+    itemRow.classList.toggle('hidden', !chatUi.matchesConversation(item, state.conversationSearch));
     items.append(itemRow);
   });
+  const noResults = document.createElement('div');
+  noResults.className = 'conversation-empty';
+  noResults.textContent = '没有找到联系人';
+  const filterContacts = () => {
+    state.conversationSearch = searchInput.value;
+    let visible = 0;
+    items.querySelectorAll('[data-contact-id]').forEach(row => {
+      const contact = state.conversations.find(item => item.id === row.dataset.contactId);
+      const match = chatUi.matchesConversation(contact, state.conversationSearch);
+      row.classList.toggle('hidden', !match);
+      if (match) visible++;
+    });
+    noResults.classList.toggle('hidden', visible > 0 || !state.conversations.length);
+  };
+  items.append(noResults);
+  filterContacts();
+  searchInput.addEventListener('input', filterContacts);
   list.append(items);
 
   const main = document.createElement('section');
@@ -991,6 +1107,9 @@ function renderConversation() {
   toolbar.className = 'conversation-toolbar';
   const identity = document.createElement('div');
   identity.className = 'conversation-identity';
+  const back = iconButton('返回聊天列表', '<path d="m14 6-6 6 6 6"/>', 'icon-button conversation-back');
+  back.addEventListener('click', () => { state.mobileChat = false; layout.classList.remove('mobile-chat'); });
+  toolbar.append(back);
   identity.append(avatarNode(conversationAvatar(state.currentConversation), 'conversation-main-avatar'));
   const identityText = document.createElement('div');
   const heading = document.createElement('h1');
@@ -1022,13 +1141,13 @@ function renderConversation() {
       });
       tools.append(favorite, cancel);
     } else {
-      // 收藏、复制、引用都收进气泡菜单里，这里不再放多选按钮。
-      const edit = button('联系人设置', 'button button-quiet button-small');
-      edit.addEventListener('click', () => openConversationEditor(state.currentConversation));
-      const clearCurrent = button('清空记录', 'button button-quiet button-small');
-      clearCurrent.disabled = !(state.currentConversation.messages || []).length;
-      clearCurrent.addEventListener('click', () => openClearConfirm(state.currentConversation));
-      tools.append(edit, clearCurrent);
+      const call = iconButton('语音通话', '<path d="M8 3H4v3c0 8 6 14 14 14h3v-5l-5-1-2 2a14 14 0 0 1-6-6l2-2-2-5Z"/>');
+      call.addEventListener('click', () => { location.hash = '#/call'; });
+      const more = iconButton('更多聊天操作', '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>');
+      more.setAttribute('aria-controls', 'conversation-menu');
+      more.setAttribute('aria-expanded', 'false');
+      more.addEventListener('click', () => openConversationMenu(more));
+      tools.append(call, more);
     }
   }
   toolbar.append(identity, tools);
@@ -1036,6 +1155,9 @@ function renderConversation() {
   const stream = document.createElement('div');
   stream.id = 'message-stream';
   stream.className = 'message-stream';
+  stream.dataset.conversation = state.currentConversation?.id || '';
+  stream.setAttribute('aria-label', '聊天消息');
+  stream.tabIndex = 0;
   // 自定义聊天背景。
   if (state.chatBackground) {
     if (state.chatBackground.startsWith('data:image/')) {
@@ -1049,13 +1171,14 @@ function renderConversation() {
   main.append(stream);
   const form = document.createElement('form');
   form.className = 'message-form';
-  const disabled = state.agentBusy || onboardingNeeded() || !state.currentConversation;
+  const disabled = state.agentBusy || state.recordingPending || onboardingNeeded() || !state.currentConversation;
 
   // 左侧工具：语音、图片/视频、文件，以及 AI 语音回复开关。
   const actionsBar = document.createElement('div');
   actionsBar.className = 'compose-actions';
   const micButton = button('', `compose-icon${state.recording ? ' recording' : ''}`);
-  micButton.title = state.recording ? '松开结束，点击发送语音' : '按住或点击录语音';
+  micButton.title = state.recording ? '结束录音并发送' : '录制语音';
+  micButton.setAttribute('aria-label', micButton.title);
   micButton.disabled = disabled;
   micButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
   micButton.addEventListener('click', () => toggleRecording());
@@ -1069,6 +1192,7 @@ function renderConversation() {
   });
   const fileButton = button('', 'compose-icon');
   fileButton.title = '发送文件';
+  fileButton.setAttribute('aria-label', '发送图片、视频或文件');
   fileButton.disabled = disabled;
   fileButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3v5h5"/><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/></svg>';
   fileButton.addEventListener('click', () => fileInput.click());
@@ -1077,6 +1201,7 @@ function renderConversation() {
   voiceToggle.title = '让 AI 发语音回复';
   const voiceCheck = document.createElement('input');
   voiceCheck.type = 'checkbox';
+  voiceCheck.setAttribute('aria-label', 'AI 使用语音回复');
   voiceCheck.checked = state.aiVoiceReply;
   voiceCheck.addEventListener('change', async () => {
     try {
@@ -1090,16 +1215,18 @@ function renderConversation() {
     }
   });
   const voiceLabel = document.createElement('span');
-  voiceLabel.textContent = '发语音';
+  voiceLabel.setAttribute('aria-hidden', 'true');
+  voiceLabel.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m11 4-6 5H2v6h3l6 5V4Z"/><path d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></svg>';
   voiceToggle.append(voiceCheck, voiceLabel);
-  const pasteHint = document.createElement('span');
-  pasteHint.className = 'compose-hint';
-  pasteHint.textContent = '图片 / 视频直接粘贴或拖进来';
-  actionsBar.append(micButton, fileButton, fileInput, voiceToggle, pasteHint);
+  const replyStatus = document.createElement('span');
+  replyStatus.className = 'compose-status';
+  replyStatus.setAttribute('role', 'status');
+  replyStatus.textContent = state.recordingPending ? '正在处理语音…' : state.agentBusy ? '正在回复…' : '';
+  actionsBar.append(replyStatus);
   if (state.recording) {
     const tip = document.createElement('span');
     tip.className = 'recording-tip';
-    tip.textContent = '正在录音，再点一次麦克风结束并发送';
+    tip.textContent = '正在录音…';
     actionsBar.append(tip);
   }
 
@@ -1115,6 +1242,7 @@ function renderConversation() {
     text.textContent = `${state.quote.role === 'user' ? '我' : '对方'}：${state.quote.text}`;
     const drop = button('', 'compose-quote-close');
     drop.title = '取消引用';
+    drop.setAttribute('aria-label', '取消引用');
     drop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
     drop.addEventListener('click', () => {
       state.quote = null;
@@ -1124,12 +1252,18 @@ function renderConversation() {
     quoteBar = quote;
   }
   const input = document.createElement('textarea');
-  input.disabled = disabled;
-  input.placeholder = state.currentConversation ? '说点什么，Enter 发送，Shift+Enter 换行' : '先在左侧选一个联系人';
+  input.disabled = onboardingNeeded() || !state.currentConversation;
+  input.placeholder = state.currentConversation ? '发消息…' : '选择联系人';
+  input.setAttribute('aria-label', '消息，Enter 发送，Shift+Enter 换行');
   input.value = state.draft || '';
-  input.addEventListener('input', () => { state.draft = input.value; });
+  const resizeInput = () => { input.style.height = '44px'; input.style.height = `${Math.min(140, Math.max(44, input.scrollHeight))}px`; };
+  input.addEventListener('input', () => {
+    state.draft = input.value;
+    if (!state.agentBusy) send.disabled = disabled || !input.value.trim();
+    resizeInput();
+  });
   input.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !state.agentBusy) {
       event.preventDefault();
       form.requestSubmit();
     }
@@ -1161,16 +1295,23 @@ function renderConversation() {
     const file = event.dataTransfer?.files?.[0];
     if (file) sendAttachment(file);
   });
-  const send = button('发送', 'button');
-  send.type = 'submit';
-  send.disabled = disabled;
-  inputRow.append(input, send);
-  form.append(actionsBar);
+  const send = button(state.agentBusy ? '停止' : '发送', `button${state.agentBusy ? ' stop-button' : ''}`);
+  send.type = state.agentBusy ? 'button' : 'submit';
+  send.setAttribute('aria-label', state.agentBusy ? '停止生成回复' : '发送消息');
+  send.disabled = state.agentBusy ? !state.agentTicketId : disabled || !input.value.trim();
+  if (state.agentBusy) send.addEventListener('click', async () => {
+    send.disabled = true;
+    try { await window.desktop.agent.chatAbort(state.agentTicketId); }
+    catch (error) { showError(error.message); send.disabled = false; }
+  });
+  inputRow.append(micButton, input, voiceToggle, fileButton, send, fileInput);
+  if (state.agentBusy || state.recordingPending || state.recording) form.append(actionsBar);
   if (quoteBar) form.append(quoteBar);
   form.append(inputRow);
   form.addEventListener('submit', event => {
     event.preventDefault();
     const value = input.value;
+    if (!value.trim() || state.agentBusy || disabled) return;
     input.value = '';
     state.draft = '';
     startAgentChat(value);
@@ -1178,7 +1319,14 @@ function renderConversation() {
   main.append(form);
   layout.append(list, main);
   content.append(layout);
+  const forceScroll = state.scrollToLatest;
   renderConversationMessages();
+  if (oldScroll && !forceScroll) stream.scrollTop = chatUi.scrollTarget(oldScroll, stream.scrollHeight);
+  resizeInput();
+  if (hadFocus && !input.disabled) {
+    input.focus({ preventScroll: true });
+    if (caret) input.setSelectionRange(...caret);
+  }
 }
 
 // iOS 风格侧滑：操作按钮垫在行下层，靠前景行左移"揭开"。
@@ -1550,8 +1698,10 @@ async function sendAttachment(file) {
 
 // 录语音：录完先转写成文字，再作为语音消息发出去。
 async function toggleRecording() {
+  if (state.recordingPending) return;
   if (state.recording) {
     const recorder = state.recording;
+    state.recordingPending = true;
     state.recording = null;
     recorder.stop();
     return;
@@ -1560,6 +1710,8 @@ async function toggleRecording() {
     showError('请先选择一个联系人');
     return;
   }
+  const recordingConversationId = state.currentConversation.id;
+  state.recordingPending = true;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
@@ -1571,11 +1723,12 @@ async function toggleRecording() {
     recorder.addEventListener('stop', async () => {
       stream.getTracks().forEach(track => track.stop());
       state.recording = null;
+      state.recordingPending = true;
       renderConversation();
-      if (!chunks.length) return;
-      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-      const durationMs = Date.now() - startedAt;
       try {
+        if (!chunks.length) return;
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        const durationMs = Date.now() - startedAt;
         const dataUrl = await readFileAsDataUrl(blob);
         let text = '';
         // 转写失败不拦截发送，语音条照样留在记录里。
@@ -1585,6 +1738,7 @@ async function toggleRecording() {
         } catch (error) {
           showError(`语音转文字失败：${error.message}`);
         }
+        if (state.currentConversation?.id !== recordingConversationId) throw new Error('联系人已切换，语音未发送');
         await sendMessage(text, {
           kind: 'voice',
           content: text,
@@ -1592,12 +1746,17 @@ async function toggleRecording() {
         });
       } catch (error) {
         showError(error.message);
+      } finally {
+        state.recordingPending = false;
+        renderConversation();
       }
     });
     recorder.start();
     state.recording = recorder;
+    state.recordingPending = false;
     renderConversation();
   } catch (_) {
+    state.recordingPending = false;
     showError('打不开麦克风，请检查系统录音权限');
   }
 }
@@ -1627,6 +1786,7 @@ async function sendMessage(text, message = null) {
     };
     state.agentBusy = true;
     state.streamingText = '';
+    state.scrollToLatest = true;
     renderConversation();
     state.quote = null;
     const result = await window.desktop.agent.chatStart(conversationId, quoted, message || undefined);
@@ -1653,9 +1813,10 @@ async function startAgentChat(text) {
 
 async function handleAgentEvent(event) {
   if (!event || event.conversationId !== state.currentConversation?.id) return;
+  if (event.ticketId && state.agentTicketId && event.ticketId !== state.agentTicketId) return;
   if (event.type === 'delta') {
     state.streamingText += event.delta || '';
-    renderConversationMessages();
+    renderConversationMessages(true);
     return;
   }
   if (event.type !== 'done' && event.type !== 'error') return;
@@ -1748,6 +1909,7 @@ function renderProviders() {
 }
 
 function callServiceBlocked(shell) {
+  if (window.earshotBridge?.isMock) return false;
   if (state.service.status === 'ready' && state.meta?.port) return false;
   const empty = document.createElement('div');
   empty.className = 'settings-card call-empty';
@@ -1783,8 +1945,13 @@ function callTimeLabel(value) {
 // 通话页按 iOS 电话的做法分成最近通话、联系人、拨号键盘三个标签。
 function renderCall() {
   content.replaceChildren();
+  content.classList.remove('chat-content');
   const shell = document.createElement('div');
   shell.className = 'call-shell';
+  const heading = document.createElement('div');
+  heading.className = 'page-heading';
+  heading.innerHTML = '<h1>通话</h1>';
+  shell.append(heading);
   if (callServiceBlocked(shell)) return;
 
   const tabs = document.createElement('div');
@@ -1817,6 +1984,7 @@ function renderCallRecents(body, shell) {
   if (state.callLog.length) {
     const clear = button('清空', 'button button-quiet button-small');
     clear.addEventListener('click', async () => {
+      if (!window.confirm('清空所有通话记录？删除后无法恢复，联系人会保留。')) return;
       try {
         await window.desktop.calls.clear();
         state.callLog = await window.desktop.calls.list();
@@ -2045,10 +2213,11 @@ function renderFavorites() {
   content.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'page-heading';
-  heading.innerHTML = '<div><h1>收藏</h1><p>聊天里右键一条消息，或用「多选收藏」一次收几条。</p></div>';
+  heading.innerHTML = '<div><h1>收藏</h1></div>';
   if (state.favorites.length) {
     const clear = button('清空收藏', 'button button-danger');
     clear.addEventListener('click', async () => {
+      if (!window.confirm('清空全部收藏？删除后无法恢复，聊天记录会保留。')) return;
       try {
         await window.desktop.favorites.clear();
         state.favorites = await window.desktop.favorites.list();
@@ -2280,6 +2449,7 @@ function applyAppBackground(value) {
   const root = document.documentElement;
   if (!value) {
     document.body.style.backgroundImage = '';
+    document.body.style.backgroundColor = '';
     root.classList.remove('has-app-background');
     return;
   }
@@ -2290,7 +2460,7 @@ function applyAppBackground(value) {
   }
   document.body.style.backgroundImage = '';
   document.body.style.backgroundColor = value;
-  root.classList.remove('has-app-background');
+  root.classList.add('has-app-background');
 }
 
 // 光雾配色：三组预设 + 三个取色器，落盘为逗号分隔的 #rrggbb
@@ -2713,7 +2883,9 @@ function openCallSettingsDialog() {
 }
 
 async function renderSettings() {
+  const routeAtStart = location.hash;
   const settings = await window.desktop.app.settings.get();
+  if (location.hash !== routeAtStart) return;
   const savedAvatar = settings.avatar || 'preset-1';
   const savedUserAvatar = settings.userAvatar || 'preset-4';
   state.avatars = { ai: savedAvatar, user: savedUserAvatar };
@@ -2726,13 +2898,14 @@ async function renderSettings() {
     const text = document.createElement('div');
     const title = document.createElement('strong');
     title.textContent = labelText;
-    const note = document.createElement('p');
-    note.textContent = hint;
-    text.append(title, note);
+    text.className = 'pref-label';
+    text.append(title);
+    if (hint) text.append(info(hint));
     const toggle = document.createElement('label');
     toggle.className = 'switch';
     const input = document.createElement('input');
     input.type = 'checkbox';
+    input.setAttribute('aria-label', labelText);
     input.checked = checked;
     const slider = document.createElement('span');
     slider.className = 'slider';
@@ -2755,6 +2928,10 @@ async function renderSettings() {
     const node = document.createElement('span');
     node.className = 'setting-info';
     node.title = message;
+    node.tabIndex = 0;
+    node.setAttribute('role', 'note');
+    node.setAttribute('aria-label', message);
+    node.dataset.tooltip = message;
     node.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></svg>';
     return node;
   };
@@ -2775,6 +2952,7 @@ async function renderSettings() {
     option.innerHTML = `<span class="theme-swatch"></span><strong>${label}</strong>${option.classList.contains('selected') ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>' : ''}`;
     option.addEventListener('click', async () => {
       document.documentElement.dataset.theme = theme;
+      applyThemeHue(state.themeHue);
       localStorage.setItem('earshot:theme', theme);
       await window.desktop.app.settings.save({ theme });
       renderSettings();
@@ -2860,6 +3038,7 @@ async function renderSettings() {
   toneInput.maxLength = 2000;
   toneInput.value = settings.toneText || '';
   toneInput.placeholder = '例如：自然、口语化，像熟人聊天一样回答。';
+  toneInput.setAttribute('aria-label', '默认语气');
   const toneSave = button('保存');
   toneSave.addEventListener('click', async () => {
     try {
@@ -2905,7 +3084,7 @@ async function renderSettings() {
   const openCallSettings = button('通话高级设置…', 'button button-quiet');
   openCallSettings.addEventListener('click', () => openCallSettingsDialog());
   callAdvanced.append(openCallSettings);
-  callCard.append(callNote, callAdvanced);
+  callCard.append(callAdvanced);
   content.append(callCard);
 
   // 聊天背景与通话背景。
@@ -3162,6 +3341,7 @@ async function renderSettings() {
   memoryLabel.textContent = '启用记忆';
   const memoryInput = document.createElement('input');
   memoryInput.type = 'checkbox';
+  memoryInput.setAttribute('aria-label', '启用记忆');
   memoryInput.checked = state.memoryEnabled;
   const memorySave = button('保存开关', 'button button-quiet button-small');
   memorySave.addEventListener('click', async () => {
@@ -3184,6 +3364,7 @@ async function renderSettings() {
   const memoryUrl = document.createElement('input');
   memoryUrl.value = state.memoryBaseUrl;
   memoryUrl.placeholder = '例如 http://127.0.0.1:8765';
+  memoryUrl.setAttribute('aria-label', '记忆服务地址');
   const testMemory = button('测试连接', 'button button-quiet button-small');
   const testResult = document.createElement('div');
   testResult.className = 'memory-test-result';
@@ -3216,6 +3397,15 @@ async function renderSettings() {
     });
   });
   content.append(about);
+  const explanations = new Map();
+  content.querySelectorAll('.settings-note').forEach(note => {
+    if (note === chatDataNote) return;
+    const title = note.parentElement.querySelector(':scope > .background-title, :scope > h2') || note.closest('.settings-section')?.querySelector('h2');
+    if (!title) return;
+    explanations.set(title, [explanations.get(title), note.textContent].filter(Boolean).join('\n'));
+    note.remove();
+  });
+  explanations.forEach((message, title) => title.append(info(message)));
 }
 
 function settingRow(label, value) {
@@ -3420,6 +3610,8 @@ async function refresh() {
 function renderRoute() {
   const route = location.hash || '#/conversation';
   const pathName = route.split('?')[0].replace(/^#/, '') || '/conversation';
+  closeMessageMenu();
+  content.classList.toggle('chat-content', pathName === '/conversation');
   // 供应商已并入设置，侧边只保留聊天 / 通话 / 收藏 / 设置。
   setActiveNav(pathName === '/providers' ? '/settings' : pathName);
   if (pathName === '/conversation') renderConversation();
@@ -3431,171 +3623,6 @@ function renderRoute() {
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
 document.documentElement.dataset.theme = 'mono-light';
-
-// 首屏遮罩：#090909 上白色粒子自下而上升起，中心向四周淡出，约 800ms 后整体淡出。
-(() => {
-  const veil = document.getElementById('boot-veil');
-  if (!veil) return;
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { veil.remove(); return; }
-  const ctx = veil.getContext('2d');
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  let w = window.innerWidth, h = window.innerHeight;
-  const size = () => {
-    w = window.innerWidth; h = window.innerHeight;
-    veil.width = Math.round(w * dpr);
-    veil.height = Math.round(h * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  };
-  size();
-  const dots = [];
-  const count = Math.round((w * h) / 5200);
-  for (let i = 0; i < count; i++) {
-    dots.push({
-      x: Math.random() * w,
-      y: h + Math.random() * h * 0.55,
-      r: Math.random() * 1.5 + 0.3,
-      v: 42 + Math.random() * 135,
-      a: 0.25 + Math.random() * 0.75,
-      sway: (Math.random() - 0.5) * 20,
-      seed: Math.random() * 6.28,
-    });
-  }
-  const start = performance.now();
-  const HOLD = 800, FADE = 620;
-  let last = start;
-  const cx = w / 2, cy = h / 2;
-  const maxD = Math.hypot(cx, cy);
-  const tick = now => {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    const life = now - start;
-    const out = life <= HOLD ? 0 : Math.min(1, (life - HOLD) / FADE);
-    ctx.fillStyle = '#090909';
-    ctx.fillRect(0, 0, w, h);
-    ctx.save();
-    for (const d of dots) {
-      d.y -= d.v * dt;
-      d.x += Math.sin(now / 760 + d.seed) * d.sway * dt;
-      if (d.y < -8) { d.y = h + Math.random() * 40; d.x = Math.random() * w; }
-      // 中心最亮，向四周淡出
-      const dist = Math.hypot(d.x - cx, d.y - cy) / maxD;
-      const radial = Math.max(0, 1 - dist * 1.15);
-      ctx.globalAlpha = d.a * radial * (1 - out);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-    if (out >= 1) { cleanup(); return; }
-    veil.style.opacity = String(1 - out);
-    requestAnimationFrame(tick);
-  };
-  // 兜底：窗口在后台时 rAF 会被节流甚至停摆，遮罩不能因此一直盖着页面。
-  // 用挂钟定时器保证到点必退场。
-  const cleanup = () => {
-    clearTimeout(failsafe);
-    window.removeEventListener('resize', size);
-    veil.remove();
-  };
-  const failsafe = setTimeout(cleanup, HOLD + FADE + 400);
-  window.addEventListener('resize', size);
-  requestAnimationFrame(tick);
-})();
-
-// ── 侧边栏滚动联动（S04 滚动章节转场 / S08 滚动即运镜）──
-// 内容在 .content 内滚动，把滚动进度与速度写进 CSS 变量，让侧边栏跟着"呼吸"：
-//   · 氛围层按 0.15 速率做中景视差（复用清单里最慢的一层）
-//   · 进度条随滚动充盈，当前导航项辉光随之加强
-//   · 速度驱动一点点倾斜与色相偏移，停下即回正（600ms 参数插值）
-// 只写 CSS 变量 + transform/opacity，不触发重排；单个 rAF 循环。
-(() => {
-  const shell = document.querySelector('.shell');
-  const sidebar = document.querySelector('.sidebar');
-  if (!shell || !sidebar) return;
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  // 氛围层：垫在侧边栏内容之下，随滚动缓慢漂移
-  const aura = document.createElement('div');
-  aura.className = 'sidebar-aura';
-  aura.setAttribute('aria-hidden', 'true');
-  sidebar.prepend(aura);
-  // 滚动进度轨：贴在侧边栏右缘
-  const rail = document.createElement('div');
-  rail.className = 'sidebar-rail';
-  rail.setAttribute('aria-hidden', 'true');
-  const railFill = document.createElement('i');
-  rail.append(railFill);
-  sidebar.append(rail);
-
-  let target = { p: 0, v: 0 };     // 目标进度与速度
-  let shown = { p: 0, v: 0 };      // 实际展示值（朝目标插值，天然可中断）
-  let raf = 0, lastTop = 0, lastT = 0;
-  let activeScroller = null;       // 当前真正在滚的容器
-
-  const read = () => {
-    const el = activeScroller || document.querySelector('.content');
-    if (!el) return;
-    const max = el.scrollHeight - el.clientHeight;
-    const top = el.scrollTop;
-    const now = performance.now();
-    // 首次进入不计速度（没有前一帧可比），之后用真实间隔
-    const dt = lastT ? Math.max(8, now - lastT) : 0;
-    target.p = max > 2 ? Math.min(1, top / max) : 0;
-    if (dt > 0) {
-      // 速度归一化：约 0.9 屏/秒即算满速，贴近真实滚轮与触控板力度
-      const vRaw = Math.abs(top - lastTop) / dt * 1000 / Math.max(1, el.clientHeight * 0.9);
-      // 取峰值保持：tick 的衰减不能把刚采到的这一下抹掉
-      target.v = Math.min(1, Math.max(target.v, vRaw));
-    }
-    lastTop = top; lastT = now;
-    if (!raf) raf = requestAnimationFrame(tick);
-  };
-
-  const tick = () => {
-    // 从当前展示值朝目标插值：手势随时改向都不会跳变
-    shown.p += (target.p - shown.p) * 0.18;
-    // 速度上升快、回落慢：抬手后留一点余韵，符合"惯性"观感
-    shown.v += (target.v - shown.v) * (target.v > shown.v ? 0.55 : 0.07);
-    target.v *= 0.94;                      // 没有新滚动就自然衰减回零
-    const p = Math.round(shown.p * 1000) / 1000;
-    const v = Math.round(shown.v * 1000) / 1000;
-    sidebar.style.setProperty('--scroll-p', String(p));
-    sidebar.style.setProperty('--scroll-v', String(v));
-    railFill.style.transform = `scaleY(${Math.max(0.02, p)})`;
-    const settled = Math.abs(target.p - shown.p) < 0.001 && shown.v < 0.004;
-    if (settled) { shown.v = 0; sidebar.style.setProperty('--scroll-v', '0'); raf = 0; return; }
-    raf = requestAnimationFrame(tick);
-  };
-
-  // 滚动容器每次路由切换都会重建，用事件委托监听。
-  // 聊天页滚动发生在 .message-stream，设置/收藏等页在 .content，两者都算。
-  const isScroller = el => el instanceof Element
-    && (el.classList.contains('content') || el.classList.contains('message-stream'));
-  document.addEventListener('scroll', event => {
-    if (!isScroller(event.target)) return;
-    if (reduced) {
-      // 降级：只更新进度，不做视差与倾斜
-      const el = event.target;
-      const max = el.scrollHeight - el.clientHeight;
-      const p = max > 2 ? Math.min(1, el.scrollTop / max) : 0;
-      sidebar.style.setProperty('--scroll-p', String(p));
-      sidebar.style.setProperty('--scroll-v', '0');
-      railFill.style.transform = `scaleY(${Math.max(0.02, p)})`;
-      return;
-    }
-    activeScroller = event.target;
-    read();
-  }, true);
-  // 路由切换后重置基准，避免把"换页"误当成一次高速滚动
-  window.addEventListener('hashchange', () => {
-    lastTop = 0; lastT = 0; activeScroller = null;
-    target = { p: 0, v: 0 }; shown = { p: 0, v: 0 };
-    sidebar.style.setProperty('--scroll-p', '0');
-    sidebar.style.setProperty('--scroll-v', '0');
-    railFill.style.transform = 'scaleY(0.02)';
-  });
-})();
 
 // 侧边栏收起/展开，状态记在本地，下次打开保持。
 const SIDEBAR_KEY = 'earshot:sidebar-collapsed';
@@ -3622,6 +3649,10 @@ function applySidebarCollapsed(collapsed) {
 
 $('#open-logs')?.addEventListener('click', () => window.desktop.app.openPath('logs'));
 window.addEventListener('hashchange', renderRoute);
+window.addEventListener('resize', () => {
+  const active = $('.nav a.active');
+  if (active) setActiveNav(active.dataset.route);
+});
 window.desktop.agent.onEvent(handleAgentEvent);
 window.desktop.onState(async service => {
   state.service = service;

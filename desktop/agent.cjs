@@ -106,6 +106,7 @@ function createSseParser(onEvent) {
 
 async function streamChat({ provider, messages, signal, onDelta, onDone, onError, fetchImpl = globalThis.fetch }) {
   if (typeof fetchImpl !== 'function') throw new Error('当前运行环境不支持网络请求');
+  if (signal?.aborted) return false;
   const controller = new AbortController();
   const timeoutMs = Number(provider?.timeoutMs) > 0 ? Number(provider.timeoutMs) : 30_000;
   const timeout = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
@@ -184,8 +185,8 @@ async function requestJson(url, options = {}, fetchImpl = globalThis.fetch) {
   return response.json();
 }
 
-async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3, fetchImpl = globalThis.fetch }) {
-  if (!memoryEnabled || !String(memoryBaseUrl || '').trim()) return [];
+async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3, signal, fetchImpl = globalThis.fetch }) {
+  if (signal?.aborted || !memoryEnabled || !String(memoryBaseUrl || '').trim()) return [];
   try {
     const params = new URLSearchParams({
       query: String(query || ''),
@@ -194,6 +195,7 @@ async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3,
     });
     const result = await requestJson(`${memoryEndpoint(memoryBaseUrl, 'recall')}?${params}`, {
       method: 'GET',
+      signal,
     }, fetchImpl);
     return memoryItems(result);
   } catch (_) {
@@ -201,11 +203,12 @@ async function recallMemories({ memoryBaseUrl, memoryEnabled, query, budget = 3,
   }
 }
 
-async function storeMemory({ memoryBaseUrl, memoryEnabled, text, fetchImpl = globalThis.fetch }) {
-  if (!memoryEnabled || !String(memoryBaseUrl || '').trim()) return false;
+async function storeMemory({ memoryBaseUrl, memoryEnabled, text, signal, fetchImpl = globalThis.fetch }) {
+  if (signal?.aborted || !memoryEnabled || !String(memoryBaseUrl || '').trim()) return false;
   try {
     await requestJson(memoryEndpoint(memoryBaseUrl, 'store'), {
       method: 'POST',
+      signal,
       body: JSON.stringify({ text: String(text || ''), tag: 'conversation' }),
     }, fetchImpl);
     return true;

@@ -180,12 +180,13 @@ async function transcribeAudio(dataUrl) {
 }
 
 // 把文字读成语音，返回 data URL 供界面直接播放。
-async function synthesizeSpeech(text) {
+async function synthesizeSpeech(text, signal) {
   const provider = activeProviderOfKind('tts');
   const input = String(text || '').replace(/\[[a-z][a-z ,'-]{0,40}\]/gi, '').trim();
   if (!input) throw new Error('没有可朗读的文字');
   const base = String(provider.baseUrl).replace(/\/+$/, '');
-  const timeout = AbortSignal.timeout(Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) * 4 : 40_000);
+  const deadline = AbortSignal.timeout(Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) * 4 : 40_000);
+  const timeout = signal ? AbortSignal.any([signal, deadline]) : deadline;
   let response;
   if (provider.protocol === 'elevenlabs') {
     response = await fetch(`${base}/v1/text-to-speech/${encodeURIComponent(provider.voice || '')}/stream?output_format=mp3_44100_64`, {
@@ -248,7 +249,9 @@ function startAgentChat(conversationId, userText, userMessage = null) {
         memoryBaseUrl: config.memoryBaseUrl,
         memoryEnabled: config.memoryEnabled,
         query: userText,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted) return;
       // 多模态：图片按 OpenAI vision 格式随消息发给模型；关掉或模型不支持时退回文字占位。
       const vision = config.visionEnabled === true;
       const messages = [
@@ -278,21 +281,21 @@ function startAgentChat(conversationId, userText, userMessage = null) {
         onDone: () => {},
         onError: message => {
           failed = true;
-          agentEvent({ type: 'error', conversationId, ticketId, message });
+          if (!controller.signal.aborted) agentEvent({ type: 'error', conversationId, ticketId, message });
         },
       });
-      if (completed && !failed && !assistantText) {
+      if (completed && !failed && !controller.signal.aborted && !assistantText) {
         agentEvent({ type: 'error', conversationId, ticketId, message: '响应格式异常：模型没有返回文字' });
         return;
       }
-      if (completed && !failed && assistantText) {
+      if (completed && !failed && !controller.signal.aborted && assistantText) {
         // 开了「AI 用语音回复」就把这段话合成成语音条；合成失败则退回文字，不打断聊天。
         let voice = null;
         if (config.aiVoiceReply === true) {
           try {
-            voice = await synthesizeSpeech(assistantText);
+            voice = await synthesizeSpeech(assistantText, controller.signal);
           } catch (error) {
-            agentEvent({ type: 'notice', conversationId, ticketId, message: `语音合成失败，已改为文字：${error.message}` });
+            if (!controller.signal.aborted) agentEvent({ type: 'notice', conversationId, ticketId, message: `语音合成失败，已改为文字：${error.message}` });
           }
         }
         conversationStore.append(conversationId, voice
@@ -303,12 +306,14 @@ function startAgentChat(conversationId, userText, userMessage = null) {
             attachment: { name: '语音', mime: voice.mime, size: voice.size, dataUrl: voice.dataUrl },
           }
           : { role: 'assistant', content: assistantText });
+        if (controller.signal.aborted) return;
         await storeMemory({
           memoryBaseUrl: config.memoryBaseUrl,
           memoryEnabled: config.memoryEnabled,
+          signal: controller.signal,
           text: `用户：${userText}\n助手：${assistantText}`,
         });
-        agentEvent({ type: 'done', conversationId, ticketId, content: assistantText });
+        if (!controller.signal.aborted) agentEvent({ type: 'done', conversationId, ticketId, content: assistantText });
         return;
       }
       // 出错或被中断时也把已经收到的半句话存下来，避免聊天记录出现空洞。
@@ -323,19 +328,29 @@ function startAgentChat(conversationId, userText, userMessage = null) {
       agentEvent({ type: 'error', conversationId, ticketId, message: error.message || '对话请求失败' });
     } finally {
       agentTickets.delete(ticketId);
+      if (controller.signal.aborted) agentEvent({ type: 'done', conversationId, ticketId, aborted: true });
     }
   })();
   return ticketId;
+}
+
+function titleBarColors(theme = 'mono-light') {
+  if (theme === 'mono-light') return { color: '#f2f2f7', symbolColor: '#242426', height: 40 };
+  if (theme === 'contrast') return { color: '#0a0a0a', symbolColor: '#ffffff', height: 40 };
+  if (theme === 'warm-night') return { color: '#1b1714', symbolColor: '#f0e6da', height: 40 };
+  return { color: '#1c1c1e', symbolColor: '#f5f5f7', height: 40 };
 }
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
-    minWidth: 1024,
-    minHeight: 700,
+    minWidth: 900,
+    minHeight: 600,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: titleBarColors(config?.theme),
     show: false,
-    backgroundColor: '#111827',
+    backgroundColor: '#f1f3f2',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -800,6 +815,7 @@ function registerIpc() {
     if (typeof patch.toneId === 'string' && toneOptions.some(item => item.id === patch.toneId)) next.activeToneId = patch.toneId;
     config = next;
     writeConfig(app, config, safeStorage);
+    if (patch.theme && mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitleBarOverlay(titleBarColors(config.theme));
     return {
       persona: config.persona,
       avatar: config.avatar,

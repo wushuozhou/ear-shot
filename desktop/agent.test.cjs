@@ -29,6 +29,37 @@ test('SSE parser handles split chunks, multiple events, and DONE', () => {
   assert.deepEqual(events, ['{"a":1}', '{"b":2}', '[DONE]']);
 });
 
+test('a chat cancelled before its model request never contacts the provider', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let requests = 0;
+  const completed = await streamChat({
+    provider: { baseUrl: 'https://example.invalid', model: 'test' },
+    messages: [],
+    signal: controller.signal,
+    fetchImpl: async () => { requests++; throw new Error('must not request'); },
+  });
+  assert.equal(completed, false);
+  assert.equal(requests, 0);
+});
+
+test('memory recall and storage stop immediately when their caller cancels', async () => {
+  for (const operation of [recallMemories, storeMemory]) {
+    const controller = new AbortController();
+    let observedSignal;
+    const pending = operation({
+      memoryBaseUrl: 'https://example.invalid', memoryEnabled: true, query: 'test', text: 'test', signal: controller.signal,
+      fetchImpl: async (_url, options) => {
+        observedSignal = options.signal;
+        return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+      },
+    });
+    assert.equal(observedSignal, controller.signal);
+    controller.abort();
+    assert.deepEqual(await pending, operation === recallMemories ? [] : false);
+  }
+});
+
 test('system prompt follows persona, tone, memory, and constraints order', () => {
   const prompt = buildSystemPrompt({
     persona: 'PERSONA',

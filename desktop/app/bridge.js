@@ -45,7 +45,17 @@
     favorites: [],
     callLog: [],
   };
+  // Keep preview interactions faithful without contacting a model or using real user data.
+  let agentListener = () => {};
+  memory.conversations.forEach((contact, index) => {
+    contact.updatedAt = new Date(Date.now() - index * 3600000).toISOString();
+    contact.messages.forEach((message, messageIndex) => {
+      message.id = `preview-${index}-${messageIndex}`;
+      message.createdAt = new Date(Date.now() - (10 - messageIndex) * 60000).toISOString();
+    });
+  });
   const real = window.electronAPI || window.desktop;
+  document.documentElement.classList.toggle('desktop-window', !!real);
   const invoke = async (fn, fallback) => {
     if (!real) return fallback();
     try { return await fn(); } catch (error) { throw error; }
@@ -135,11 +145,21 @@
         item.settings = { ...(item.settings || {}), ...patch };
         return item;
       },
-      chatStart: async (id, text, message) => { const item = memory.conversations.find(row => row.id === id); if (item) { item.messages.push(message ? { ...message, role: 'user', id: `u-${Date.now()}` } : { role: 'user', kind: 'text', content: text, id: `u-${Date.now()}` }, { role: 'assistant', kind: 'text', content: `浏览器预览回复：${text || '[附件]'}`, id: `a-${Date.now()}` }); } return { ticketId: `mock-ticket-${Date.now()}` }; },
+      chatStart: async (id, text, message) => {
+        const item = memory.conversations.find(row => row.id === id);
+        const ticketId = `mock-ticket-${Date.now()}`;
+        if (item) {
+          const createdAt = new Date().toISOString();
+          item.updatedAt = createdAt;
+          item.messages.push(message ? { ...message, role: 'user', id: `u-${Date.now()}`, createdAt } : { role: 'user', kind: 'text', content: text, id: `u-${Date.now()}`, createdAt }, { role: 'assistant', kind: 'text', content: `浏览器预览回复：${text || '[附件]'}`, id: `a-${Date.now()}`, createdAt });
+          setTimeout(() => agentListener({ type: 'done', conversationId: id, ticketId }), 0);
+        }
+        return { ticketId };
+      },
       transcribe: async () => ({ text: '浏览器预览模式没有真实转写' }),
       speak: async () => { throw new Error('浏览器预览模式不支持语音合成'); },
       chatAbort: async () => ({ ok: true }),
-      onEvent: () => () => {},
+      onEvent: callback => { agentListener = callback; return () => { agentListener = () => {}; }; },
       memoryGet: async () => ({ memoryBaseUrl: '', memoryEnabled: false }),
       memorySet: async () => ({}),
       memoryTest: async () => ({ ok: true, message: '浏览器预览模式' }),
