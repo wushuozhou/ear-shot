@@ -1,0 +1,10 @@
+.nav-en-overlay button span {display:block;font-family:'Microsoft YaHei',sans-serif;font-size:9px;letter-spacing:.1em;line-height:1.5;font-weight:400;opacity:.62}
+.nav-en-overlay button:focus-visible {outline:1px solid #c4eaff!important;outline-offset:4px;border-radius:6px}
+.ChatDOM textarea,.ChatDOM p,.ChatDOM a {font-family:nbarchitekt,'Microsoft YaHei',sans-serif!important}
+.tingyu-contact-open .nav-en-contact span {font-size:0}
+.tingyu-contact-open .nav-en-contact span:after {content:'关闭';font-size:9px}
+@media(prefers-reduced-motion:reduce){.nav-en-overlay{transition-duration:.1s!important}}
+
+.nav-en-orb-core{background:url('../images/tingyu-icon.png') center/contain no-repeat!important;box-shadow:none!important}.nav-en-orb-core:after{display:none!important}
+.tingyu-scene-annotation{position:fixed;bottom:38px;left:6vw;z-index:9999;pointer-events:none;font:12px/1.6 -apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;letter-spacing:.12em;color:#d2e0e5;text-shadow:0 1px 10px #000c}.tingyu-scene-annotation:empty{display:none}
+.tingyu-contact-notes{display:none;position:fixed;inset:0;z-index:9998;pointer-events:none;color:#d9e6ed;font:11px/1.5 -apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;letter-spacing:.1em}.tingyu-contact-open .tingyu-contact-notes{display:block}.tingyu-contact-notes span{position:absolute;top:0;left:0;white-space:nowrap;text-shadow:0 1px 8px #000}

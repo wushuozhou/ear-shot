@@ -1,8 +1,8 @@
 {
   "name": "earshot-desktop",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
-  "description": "Electron desktop shell for Earshot",
+  "description": "听屿 · 聊天、语音与记忆",
   "license": "MIT",
   "main": "main.cjs",
   "scripts": {
@@ -11,7 +11,7 @@
   },
   "build": {
     "appId": "com.wushuozhou.earshot",
-    "productName": "Earshot",
+    "productName": "听屿",
     "directories": {
       "output": "dist"
     },
@@ -24,7 +24,8 @@
       "agent.cjs",
       "loading.html",
       "app/**/*",
-      "skills/**/*"
+      "skills/**/*",
+      "archive-protocol.cjs"
     ],
     "extraResources": [
       {
@@ -50,8 +51,10 @@
     ],
     "win": {
       "target": "nsis",
-      "artifactName": "Earshot-Setup-${version}.${ext}",
-      "signAndEditExecutable": false
+      "artifactName": "Tingyu-Setup-${version}.${ext}",
+      "signAndEditExecutable": true,
+      "icon": "app/brand/tingyu.ico",
+      "signExecutable": false
     },
     "nsis": {
       "allowToChangeInstallationDirectory": true,
@@ -59,8 +62,9 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Earshot 听着呢"
-    }
+      "shortcutName": "听屿"
+    },
+    "executableName": "Tingyu"
   },
   "devDependencies": {
     "electron": "^36.0.0",

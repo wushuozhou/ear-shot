@@ -1,4 +1,8 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, protocol, net: electronNet } = require('electron');
+const { installArchiveProtocol } = require('./archive-protocol.cjs');
+protocol.registerSchemesAsPrivileged([{ scheme: 'tingyu-ui', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+// Product branding must keep the existing encrypted settings and conversation location.
+app.setName('earshot-desktop');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -335,10 +339,11 @@ function startAgentChat(conversationId, userText, userMessage = null) {
 }
 
 function titleBarColors(theme = 'mono-light') {
+  if (theme === 'hub') return { color: '#050a0e', symbolColor: '#e5eff0', height: 40 };
   if (theme === 'mono-light') return { color: '#f2f2f7', symbolColor: '#242426', height: 40 };
   if (theme === 'contrast') return { color: '#0a0a0a', symbolColor: '#ffffff', height: 40 };
   if (theme === 'warm-night') return { color: '#1b1714', symbolColor: '#f0e6da', height: 40 };
-  return { color: '#1c1c1e', symbolColor: '#f5f5f7', height: 40 };
+  return { color: '#070d10', symbolColor: '#e5eff0', height: 40 };
 }
 
 function createWindow() {
@@ -347,6 +352,8 @@ function createWindow() {
     height: 820,
     minWidth: 900,
     minHeight: 600,
+    title: '听屿',
+    icon: path.join(__dirname, 'app', 'brand', 'tingyu-icon-256.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: titleBarColors(config?.theme),
     show: false,
@@ -354,6 +361,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
       webviewTag: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
@@ -510,7 +518,7 @@ async function startService({ resetRestarts = false } = {}) {
       throw new Error(`服务在 30 秒内没有通过 /api/info 探活（端口 ${servicePort}）`);
     }
 
-    publish({ status: 'ready', message: `服务已启动，正在打开 Earshot（端口 ${servicePort}）…` });
+    publish({ status: 'ready', message: `服务已启动，正在打开听屿（端口 ${servicePort}）…` });
     writeLog(`服务探活成功：http://127.0.0.1:${servicePort}/api/info`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       // 先让启动页播完溶解转场再跳转，避免硬切；动画异常时兜底继续。
@@ -549,6 +557,12 @@ async function stopService() {
 }
 
 function registerIpc() {
+  ipcMain.handle('app:window-surface', (event, surface) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('窗口来源无效');
+    if (!['hub', 'mono-light', 'deep-space', 'warm-night', 'contrast'].includes(surface)) throw new Error('窗口外观无效');
+    mainWindow.setTitleBarOverlay(titleBarColors(surface));
+    return { ok: true };
+  });
   ipcMain.handle('desktop:retry', () => startService({ resetRestarts: true }));
   ipcMain.handle('desktop:get-status', () => state);
   ipcMain.handle('desktop:open-logs-dir', () => shell.openPath(path.dirname(logFile)));
@@ -1002,6 +1016,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    installArchiveProtocol(protocol, electronNet, path.join(__dirname, 'app', 'archive'));
     return bootstrap();
   });
   app.on('before-quit', event => {

@@ -4,7 +4,6 @@ const state = {
   activeProfileId: '',
   onboardingDismissed: false,
   testedProviders: new Set(),
-  initialRouteHandled: false,
   meta: null,
   service: { status: 'starting', message: '正在启动服务…' },
   conversations: [],
@@ -1832,7 +1831,7 @@ async function handleAgentEvent(event) {
   } catch (error) {
     showError(error.message);
   }
-  renderConversation();
+  renderRoute();
 }
 
 async function loadAgentState() {
@@ -1889,6 +1888,7 @@ function renderProviders() {
   groups.forEach(([kind, title, description]) => {
     const group = document.createElement('section');
     group.className = 'provider-group';
+    group.dataset.kind = kind;
     const groupHeading = document.createElement('div');
     groupHeading.className = 'group-heading';
     groupHeading.innerHTML = `<h2>${title}</h2><span>${description}</span>`;
@@ -1906,6 +1906,7 @@ function renderProviders() {
     group.append(grid);
     content.append(group);
   });
+  buildSectionWorkspace('providers');
 }
 
 function callServiceBlocked(shell) {
@@ -1944,15 +1945,19 @@ function callTimeLabel(value) {
 
 // 通话页按 iOS 电话的做法分成最近通话、联系人、拨号键盘三个标签。
 function renderCall() {
-  content.replaceChildren();
+  const candidate = content.querySelector('.call-shell:not(.call-active)');
+  const existingShell = candidate?.querySelector('.call-list-pane') && candidate?.querySelector('.call-preview') ? candidate : null;
+  if (!existingShell) content.replaceChildren();
   content.classList.remove('chat-content');
-  const shell = document.createElement('div');
+  const shell = existingShell || document.createElement('div');
   shell.className = 'call-shell';
   const heading = document.createElement('div');
   heading.className = 'page-heading';
   heading.innerHTML = '<h1>通话</h1>';
-  shell.append(heading);
-  if (callServiceBlocked(shell)) return;
+  if (state.service.status !== 'ready' && !window.earshotBridge?.isMock) {
+    content.replaceChildren(); shell.replaceChildren(heading);
+    if (callServiceBlocked(shell)) return;
+  }
 
   const tabs = document.createElement('div');
   tabs.className = 'call-tabs';
@@ -1964,15 +1969,16 @@ function renderCall() {
     });
     tabs.append(tab);
   });
-  shell.append(tabs);
 
   const body = document.createElement('div');
   body.className = 'call-body';
   if (state.callTab === 'recents') renderCallRecents(body, shell);
   else if (state.callTab === 'keypad') renderCallKeypad(body, shell);
   else renderCallContacts(body, shell);
-  shell.append(body);
-  content.append(shell);
+  const listPane=document.createElement('section');listPane.className='call-list-pane glass-surface';
+  listPane.append(heading,tabs,body);
+  if (existingShell) shell.querySelector('.call-list-pane')?.replaceWith(listPane);
+  else { shell.append(listPane,mountCallPreview(shell)); content.append(shell); }
 }
 
 function renderCallRecents(body, shell) {
@@ -2164,6 +2170,7 @@ function openCallView(shell, item) {
   };
   const startedAt = Date.now();
   shell.replaceChildren();
+  shell.classList.add('call-active');
   const bar = document.createElement('div');
   bar.className = 'call-stage-bar';
   const label = document.createElement('div');
@@ -2243,6 +2250,7 @@ function renderFavorites() {
     empty.className = 'empty-card';
     empty.textContent = '还没有收藏。在聊天里右键一条消息就能收进来。';
     content.append(empty);
+    buildSectionWorkspace('favorites');
     return;
   }
   groups.forEach(([source, title]) => {
@@ -2304,6 +2312,7 @@ function renderFavorites() {
     });
     content.append(group);
   });
+  buildSectionWorkspace('favorites');
 }
 
 // 色环：默认收起，点「自定义」展开。
@@ -2794,7 +2803,7 @@ function backgroundPicker(label, current, onChange, options = {}) {
   if (scenes) {
     const sceneRow = document.createElement('div');
     sceneRow.className = 'background-scenes';
-    [['scene:particle-rain', '粒子雨'], ['scene:point-cloud', '点云倒影'], ['scene:aurora-fog', '体积光雾']].forEach(([value, name]) => {
+    [['scene:spring-garden', '春日森林'], ['scene:particle-rain', '粒子雨'], ['scene:point-cloud', '点云倒影'], ['scene:aurora-fog', '体积光雾']].forEach(([value, name]) => {
       const chip = button(name, `scene-chip${current === value ? ' active' : ''}`);
       chip.addEventListener('click', () => apply(value));
       sceneRow.append(chip);
@@ -3108,7 +3117,7 @@ async function renderSettings() {
   // ── 动效场景的专属选项：只在选中对应风格时才出现 ──
   // 当前通话背景是不是内置动效场景、是哪一种，决定下面显示哪些控件。
   const activeScene = /^scene:/.test(state.callBackground || '') ? state.callBackground.slice(6) : '';
-  const isCloud = activeScene === 'point-cloud';
+  const isCloud = activeScene === 'point-cloud' || activeScene === 'spring-garden';
   const isParticle = activeScene === 'particle-rain' || isCloud || activeScene === 'aurora-fog';
 
   if (activeScene) {
@@ -3406,6 +3415,7 @@ async function renderSettings() {
     note.remove();
   });
   explanations.forEach((message, title) => title.append(info(message)));
+  buildSectionWorkspace('settings');
 }
 
 function settingRow(label, value) {
@@ -3597,10 +3607,6 @@ async function refresh() {
   state.profiles = providerData.profiles || [];
   state.activeProfileId = providerData.activeProfileId || '';
   state.onboardingDismissed = providerData.onboardingDismissed === true;
-  if (!state.initialRouteHandled) {
-    state.initialRouteHandled = true;
-    if (!state.onboardingDismissed && onboardingNeeded()) location.hash = '#/providers';
-  }
   state.meta = meta;
   state.service = service;
   renderTop();
@@ -3608,13 +3614,23 @@ async function refresh() {
 }
 
 function renderRoute() {
-  const route = location.hash || '#/conversation';
-  const pathName = route.split('?')[0].replace(/^#/, '') || '/conversation';
+  const route = location.hash || '#/home';
+  const pathName = route.split('?')[0].replace(/^#/, '') || '/home';
+  if ((state.recording || state.recordingPending) && pathName !== '/conversation') {
+    location.hash = '#/conversation';
+    showError('请等待语音发送完成再离开聊天');
+    return;
+  }
+  disposeFeatureHub();
+  disposeWorkspace();
   closeMessageMenu();
+  document.body.classList.toggle('hub-route', pathName === '/home');
+  window.desktop.app.setWindowSurface?.(pathName === '/home' ? 'hub' : document.documentElement.dataset.theme)?.catch(() => {});
   content.classList.toggle('chat-content', pathName === '/conversation');
   // 供应商已并入设置，侧边只保留聊天 / 通话 / 收藏 / 设置。
   setActiveNav(pathName === '/providers' ? '/settings' : pathName);
-  if (pathName === '/conversation') renderConversation();
+  if (pathName === '/home') renderFeatureHub();
+  else if (pathName === '/conversation') renderConversation();
   else if (pathName === '/call') renderCall();
   else if (pathName === '/favorites') renderFavorites();
   else if (pathName === '/providers') renderProviders();
@@ -3622,7 +3638,7 @@ function renderRoute() {
 }
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
-document.documentElement.dataset.theme = 'mono-light';
+document.documentElement.dataset.theme = 'deep-space';
 
 // 侧边栏收起/展开，状态记在本地，下次打开保持。
 const SIDEBAR_KEY = 'earshot:sidebar-collapsed';

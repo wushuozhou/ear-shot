@@ -51,7 +51,7 @@ jobs:
       - name: 冒烟测试：产物能否启动
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE "desktop\dist\win-unpacked\Earshot.exe"
+          $exe = Join-Path $env:GITHUB_WORKSPACE "desktop\dist\win-unpacked\Tingyu.exe"
           if (-not (Test-Path $exe)) {
             Write-Error "找不到未打包应用：$exe"
             exit 1
@@ -72,7 +72,7 @@ jobs:
 
           $logText = if (Test-Path $logPath) { Get-Content $logPath -Raw } else { "" }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Get-Process Earshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process Tingyu -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $alive) {
             Write-Host "冒烟测试失败：进程启动后已退出"
             exit 1

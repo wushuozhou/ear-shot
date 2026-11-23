@@ -1,1 +1,15 @@
-{ "name": "Earshot", "short_name": "Earshot", "start_url": "/", "display": "standalone", "background_color": "#2B3654", "theme_color": "#2B3654", "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
+{
+  "name": "听屿",
+  "short_name": "听屿",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080e12",
+  "theme_color": "#080e12",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

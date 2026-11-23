@@ -83,7 +83,7 @@ test('server: a turn streams text, strips tags and reports flags', async () => {
     const stt = await fetch(base + '/api/stt', { method: 'POST', headers: { Authorization: 'Bearer secret', 'Content-Type': 'audio/webm' }, body: new Uint8Array(2000) });
     assert.deepEqual(await stt.json(), { text: 'hello you' });
     const page = await fetch(base + '/');
-    assert.match(await page.text(), /Earshot/);
+    assert.match(await page.text(), /<title>听屿 · 通话<\/title>/);
     assert.equal((await fetch(base + '/../package.json')).status, 404);
   } finally { srv.close(); }
 });

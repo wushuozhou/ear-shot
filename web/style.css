@@ -115,3 +115,31 @@ body.has-backdrop #lines p { background:rgba(0,0,0,.42); border-color:rgba(255,2
 #chat textarea { flex:1; min-height:40px; max-height:120px; padding:9px 12px; border:1px solid rgba(255,255,255,.18); border-radius:12px; color:var(--ink); background:rgba(0,0,0,.18); font:inherit; font-size:14px; resize:none; }
 #chat textarea:focus { outline:none; border-color:var(--her); }
 #chat button { flex:0 0 auto; padding:9px 16px; border:0; border-radius:12px; color:#3A1B17; background:var(--her); font-weight:600; }
+/* Shared with the immersive desktop workspace. */
+:root{--ink:#eaf2f4;--dim:#b0c4cc;--her:#c3e8df;--cyan:#acdcd6}
+body{background:#090c10;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif}
+body.preview-mode{overflow:hidden}body.preview-mode #home,body.preview-mode #incall,body.preview-mode dialog{display:none!important}body.preview-mode::before{background:linear-gradient(180deg,#03070d33,transparent 50%,#03070d55)!important}
+#home .contact{padding:32px 48px;border:1px solid #c6e1eb30;border-radius:28px;background:#12253266;backdrop-filter:blur(26px);box-shadow:inset 0 1px 0 #ffffff21,0 20px 60px #0004}
+#home .contact h1{font-size:32px;font-weight:400;letter-spacing:-.025em}
+.call-btn{background:#b4e0d5;color:#082c26;box-shadow:inset 0 1px 0 #fff8,0 12px 38px #0003}.call-btn svg{fill:#0b3329}
+body.in-call #incall{display:grid;grid-template-columns:minmax(260px,.9fr) minmax(300px,1.1fr);align-items:stretch;gap:16px;padding:20px;min-height:100dvh;height:100dvh;overflow:hidden}
+.call-glass{position:relative;min-height:0;min-width:0;border:1px solid #c1dfe936;border-radius:24px;background:#10232c66;backdrop-filter:blur(28px) saturate(130%);box-shadow:inset 0 1px 0 #ffffff20,inset 0 -1px 0 #ffffff08,0 24px 70px #0003}
+.call-session-pane{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px 24px}
+#incall .call-session-pane header{margin:0;flex-shrink:0}#incall header b{font-size:26px;font-weight:450;letter-spacing:-.025em}#incall header .avatar{width:82px;height:82px;border-radius:24px}
+#wave{height:100px;margin:30px 0 18px;max-width:360px}#status{min-height:24px;font-size:12px;letter-spacing:.06em;text-transform:none;color:#d0e2e7}
+body[data-phase="speak"] #status::after{content:' · 点击波形打断';letter-spacing:0;text-transform:none}
+#incall footer{gap:18px;margin-top:34px}#incall .round{width:54px;height:54px;border:1px solid #d3e9ef30;background:#d5eef019;backdrop-filter:blur(18px);box-shadow:inset 0 1px 0 #ffffff24}#incall .round.end{background:#c9535e;border-color:#f0929c50}.round svg{width:22px}#timing{color:#b0c4cc;letter-spacing:.03em}
+.call-transcript-pane{display:flex;flex-direction:column;padding:28px 26px;overflow:hidden;background:#0b1a24a6}
+.call-transcript-pane h2{margin:0 0 20px;font-size:15px;letter-spacing:.015em;font-weight:550;color:#d7e7eb}
+#heard{font-size:13px;align-self:center;min-height:24px;max-width:100%;margin:0 0 12px;color:#b6e2d7}
+#lines{max-width:none;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;margin:0;padding:8px 0 20px;gap:10px}
+#lines p{font-size:14px;line-height:1.6;padding:11px 14px;border-radius:14px;background:#ffffff0b;border:1px solid #d0e5ed1c;color:#e7eff2;backdrop-filter:blur(14px)}#lines .her{background:#b5dccc18;border-color:#bbded930;color:#e1f4ee}
+#chat{max-width:none;margin:14px 0 0;padding:8px;background:#152d37a6;border:1px solid #d1e8ed24;border-radius:16px;flex-shrink:0;backdrop-filter:blur(24px)}#chat textarea{min-width:0;border:0;background:transparent;caret-color:#c3e8df}#chat button{background:#b4e0d5;color:#0a2c25;border-radius:11px;font-size:13px}
+#hint,#error{font-size:12px;line-height:1.6;text-align:left;min-height:0}#hint:empty,#error:empty{display:none}#error{color:#f5b0b2}
+@media(max-width:650px){body.in-call #incall{grid-template-columns:1fr;grid-template-rows:auto minmax(180px,1fr);padding:12px;gap:12px}.call-session-pane{padding:22px 16px}.call-session-pane header{display:grid!important;grid-template-columns:56px 1fr;column-gap:14px;text-align:left;align-items:center;width:100%}#incall header .avatar{grid-row:1/4;width:56px;height:56px;border-radius:18px;margin:0}#incall header b{font-size:20px}#incall header .number,#incall header #clock{margin:0;font-size:11px}#wave{height:55px;margin:14px 0 6px}#incall footer{margin-top:16px;gap:20px}.call-transcript-pane{padding:20px}.call-transcript-pane h2{font-size:13px;margin-bottom:12px}}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.call-glass,#home .contact{background:#10202bf5;backdrop-filter:none;border-color:#b0c8d0}.round,#chat,#lines p{backdrop-filter:none!important}body.has-backdrop::before{background:#050b1177}}
+#lines{justify-content:flex-start}#lines p:first-child{margin-top:auto}
+.call-glass{background:rgba(18,36,46,.72);border-color:#c5e6ef45;backdrop-filter:blur(44px) saturate(155%);box-shadow:inset 0 1px 0 #effaff40,inset 1px 0 0 #e1f5ff10,inset 0 -1px 0 #0005,0 24px 75px #0005}.call-transcript-pane{background:#10232dbd}.call-preview-controls .button,.round{box-shadow:inset 0 1px 0 #f2fcff40,inset 0 -1px 0 #0003,0 8px 30px #0002}
+@media(prefers-reduced-transparency:reduce),(prefers-contrast:more){.call-glass{backdrop-filter:none;background:#10202bf5}}
+#backdrop-layer::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,#07101b38,#07101b14 48%,#04091055);backdrop-filter:blur(.65px)}body[data-backdrop-scene="aurora-fog"] #backdrop-layer::after{background:linear-gradient(180deg,#06131b12,transparent 55%,#0409102b);backdrop-filter:blur(.45px)}body.preview-mode #backdrop-layer::after{background:linear-gradient(180deg,#07101b20,transparent 42%,#04091035)}
+@media(prefers-reduced-transparency:reduce){#backdrop-layer::after{backdrop-filter:none;background:#07101b80}}

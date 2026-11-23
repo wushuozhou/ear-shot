@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('desktop', {
     },
   },
   app: {
+    setWindowSurface: surface => ipcRenderer.invoke('app:window-surface', surface),
     getMeta: () => ipcRenderer.invoke('app:get-meta'),
     restartService: () => ipcRenderer.invoke('app:restart-service'),
     openPath: target => {

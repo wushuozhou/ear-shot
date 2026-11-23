@@ -18,6 +18,8 @@ const store = {
   set: (k, v) => { try { localStorage.setItem('earshot:' + k, v); } catch { /* private mode */ } },
 };
 const auth = (extra = {}) => ({ ...extra, ...(store.get('token') ? { Authorization: 'Bearer ' + store.get('token') } : {}) });
+const PREVIEW_MODE = new URLSearchParams(location.search).has('preview');
+if(PREVIEW_MODE)document.body.classList.add('preview-mode');
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const FILLER_GAP_MS = 1500, FILLER_SPACING_MS = 6000, FIRST_SPEECH_TIMEOUT_MS = 30000;
 const AVATARS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'preset-6'];
@@ -52,6 +54,7 @@ function clearBackdrop() {
   document.body.style.backgroundImage = '';
   document.body.style.backgroundColor = '';
   document.body.classList.remove('has-background', 'has-backdrop');
+  delete document.body.dataset.backdropScene;
 }
 
 function applyCallBackground(value, detail = {}) {
@@ -60,6 +63,7 @@ function applyCallBackground(value, detail = {}) {
   if (!raw) return;
   const layer = backdropLayer();
   if (raw.startsWith('scene:')) {
+    document.body.dataset.backdropScene = raw.slice(6);
     const canvas = document.createElement('canvas');
     canvas.className = 'backdrop-canvas';
     layer.append(canvas);
@@ -106,6 +110,17 @@ function applyCallBackground(value, detail = {}) {
   document.body.style.backgroundColor = raw;
 }
 
+if(PREVIEW_MODE){
+ applyCallBackground('scene:spring-garden');
+ window.addEventListener('message',event=>{
+  if(event.source!==window.parent||!['null','file://'].includes(event.origin)||event.data?.type!=='tingyu:call-preview')return;
+  const data=event.data;
+  BACKDROP_HUE=data.backdropHue??null;FLUID_CURSOR=data.fluidCursor!==false;BACKDROP_DENSITY=data.backdropDensity||1;
+  BACKDROP_PATTERN=data.backdropPattern||'';BACKDROP_SHAPE=data.backdropShape||'';FOG_COLORS=data.fogColors||'';
+  applyCallBackground(typeof data.background==='string'?data.background:'scene:spring-garden');
+ });
+}
+
 function stripStageDirections(value) {
   return String(value || '').replace(/\[[a-z][a-z ,'-]{0,40}\]\s?/gi, '');
 }
@@ -137,7 +152,7 @@ function applyContact(detail) {
   if (typeof detail.wave === 'boolean') SHOW_WAVE = detail.wave;
   // 自定义通话背景：支持 scene:<场景>（代码生成的动效背景）、图片/视频 data URL、
   // html:<源码> 自定义页面，或纯色；留空就是默认纯黑。
-  if (typeof detail.background === 'string') applyCallBackground(detail.background, detail);
+  if (typeof detail.background === 'string') applyCallBackground(detail.background || 'scene:spring-garden', detail);
   if (typeof detail.backdropHue === 'string' || typeof detail.backdropHue === 'number') {
     BACKDROP_HUE = detail.backdropHue === '' ? null : Number(detail.backdropHue);
     backdrop?.setHue(BACKDROP_HUE);
@@ -568,7 +583,10 @@ const ui = {
   timing(s) { $('#timing').textContent = `首字 ${s.toFixed(1)}s`; },
   line(who, text) {
     const el = document.createElement('p'); el.className = who; el.textContent = text;
-    $('#lines').append(el); while ($('#lines').children.length > 6) $('#lines').firstChild.remove();
+    const list = $('#lines');
+    const follow = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
+    list.append(el); while (list.children.length > 200) list.firstChild.remove();
+    if (follow) list.scrollTop = list.scrollHeight;
     if (who === 'her') ui.heard('');
     return el;
   },
