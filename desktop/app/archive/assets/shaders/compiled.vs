@@ -5312,6 +5312,8 @@ uniform float uMobile;
 uniform vec3 uUIColor;
 uniform float uUIBlend;
 uniform float uSyncTouch;
+uniform float uThemeHue;
+uniform float uThemeSaturation;
 
 
 varying vec2 vUv;
@@ -5325,6 +5327,24 @@ varying vec2 vUv;
 #require(normalmap.glsl)
 #require(range.glsl)
 #require(blendmodes.glsl)
+
+// Recolor the completed original scene, keeping neutral UI and luminance intact.
+vec3 tingyuApplySceneTheme(vec3 color) {
+    if (abs(uThemeHue) < 0.000001 && abs(uThemeSaturation - 1.0) < 0.000001) return color;
+    if (max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b)) < 0.000001) return color;
+    const vec3 luminance = vec3(0.2126, 0.7152, 0.0722);
+    float y = dot(color, luminance);
+    vec2 chroma = vec2(color.r - y, color.b - y);
+    float angle = uThemeHue * 6.283185307179586;
+    float c = cos(angle), s = sin(angle);
+    vec2 shifted = vec2(chroma.x * c - chroma.y * s, chroma.x * s + chroma.y * c) * uThemeSaturation;
+    vec3 themed = vec3(y + shifted.x, 0.0, y + shifted.y);
+    themed.g = (y - luminance.r * themed.r - luminance.b * themed.b) / luminance.g;
+    vec3 offset = themed - vec3(y);
+    vec3 limits = mix(vec3(y), vec3(1.0 - y), step(vec3(0.0), offset)) / max(abs(offset), vec3(0.000001));
+    float fit = min(1.0, min(limits.r, min(limits.g, limits.b)));
+    return vec3(y) + offset * fit;
+}
 
 float random(vec2 st) {
     return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
@@ -5401,6 +5421,7 @@ void main() {
     //color = blendOverlay(color, colorTouch, colorPush * 0.5 * smoothstep(0.0, 0.0001, uSyncTouch));
 
     color = max(vec3(0.0), min(vec3(1.0), color));
+    color = tingyuApplySceneTheme(color);
     gl_FragColor = vec4(color, 1.0);
 }{@}ChainShader.glsl{@}#!ATTRIBUTES
 

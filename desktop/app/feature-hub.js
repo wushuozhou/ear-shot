@@ -1,4 +1,5 @@
 let archiveFrame = null;
+let featureEntryGeneration = 0;
 function disposeFeatureHub() {
  if (!archiveFrame) return;
  archiveFrame.classList.add('archive-hidden');
@@ -13,13 +14,16 @@ function renderFeatureHub() {
   archiveFrame.title='听屿 · 功能空间';
   archiveFrame.src='tingyu-ui://archive/';
   archiveFrame.setAttribute('sandbox','allow-scripts allow-same-origin');
+  archiveFrame.addEventListener('load',()=>syncWorkspaceTheme());
   document.querySelector('.main').append(archiveFrame);
  }
  archiveFrame.classList.remove('archive-hidden'); archiveFrame.inert=false;
+ syncWorkspaceTheme();
  archiveFrame.contentWindow?.postMessage({type:'tingyu:visibility',visible:true}, 'tingyu-ui://archive');
 }
 async function openArchiveFeature(id){
  const feature=window.featureHubData.getFeature(id); if(!feature)return;
+ const entryGeneration = ++featureEntryGeneration;
  if(state.recording||state.recordingPending){showError('请等待语音发送完成再离开聊天');return;}
  if(id==='contacts'||id==='new-contact')state.mobileChat=false;
  if(id==='call')state.callTab='contacts';
@@ -32,6 +36,9 @@ async function openArchiveFeature(id){
   window.addEventListener('hashchange',routed);
   location.hash=targetHash;
  });
+ const expectedGeneration = routeGeneration;
+ await window.pendingWorkspaceRender;
+ if(entryGeneration !== featureEntryGeneration || location.hash !== targetHash || expectedGeneration !== routeGeneration)return;
  if(id==='persona'){
   if(state.currentConversation)openConversationEditor(state.currentConversation);
   else showMessage('先新建一位联系人');

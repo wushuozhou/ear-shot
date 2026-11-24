@@ -5,16 +5,22 @@ function buildSectionWorkspace(kind) {
   workspaceCleanup?.();
   const previousScroll = workspacePositions.get(kind) || 0;
   const sections = [...content.querySelectorAll(':scope > section.provider-group, :scope > section.settings-section')];
-  const names = { settings: ['Settings', '偏好设置'], providers: ['Models', '模型连接'], favorites: ['Saved', '我的收藏'] };
+  const names = { settings: ['设置', '设置'], providers: ['模型', '模型连接'], favorites: ['收藏', '我的收藏'] };
   const [title, chinese] = names[kind];
   const workspace = document.createElement('div'); workspace.className = 'glass-workspace';
   const aside = document.createElement('aside'); aside.className = 'workspace-index glass-surface';
   const heading = document.createElement('h1'); heading.textContent = title;
-  const subtitle = document.createElement('small'); subtitle.textContent = chinese; heading.append(subtitle);
   const nav = document.createElement('nav'); nav.setAttribute('aria-label', chinese + '分类');
   aside.append(heading,nav);
   const body = document.createElement('div'); body.className = 'workspace-body glass-surface'; body.tabIndex = -1;
   body.append(...content.childNodes);
+  const pageHeading = body.querySelector(':scope > .page-heading');
+  if (pageHeading?.querySelector('.page-heading-actions')) {
+    const title = pageHeading.querySelector('h1');
+    if (title?.parentElement.children.length === 1 && title.parentElement !== pageHeading) title.parentElement.remove();
+    else title?.remove();
+    pageHeading.classList.add('workspace-actions');
+  } else pageHeading?.remove();
   const buttons=[];
   sections.forEach((section,index)=>{
     const label = section.querySelector('h2')?.childNodes[0]?.textContent?.trim();

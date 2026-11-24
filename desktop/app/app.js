@@ -278,11 +278,41 @@ function setActiveNav(route) {
     link.classList.toggle('active', active);
     if (active) {
       link.setAttribute('aria-current', 'page');
-      const lens = $('.nav-current');
-      if (lens) lens.style.transform = matchMedia('(max-width: 600px)').matches
-        ? `translateX(${link.offsetLeft}px)` : `translateY(${link.offsetTop}px)`;
+      updateNavigationLens(link);
     } else link.removeAttribute('aria-current');
   });
+}
+
+// 顶部导航的液态玻璃滑块跟随真实尺寸移动，避免用百分比在窄窗口里漂移。
+function updateNavigationLens(link) {
+  const nav = link?.closest('.nav');
+  const lens = nav?.querySelector('.nav-current');
+  if (!nav || !lens || !link) return;
+  lens.style.width = `${link.offsetWidth}px`;
+  lens.style.height = `${link.offsetHeight}px`;
+  lens.style.transform = `translate(${link.offsetLeft}px, ${link.offsetTop}px)`;
+}
+
+// 页面切换和聊天联系人切换共享同一套轻量进入动效；减少动态时只保留透明度反馈。
+function animatePaneEntrance(node) {
+  if (!node || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  node.classList.remove('pane-enter');
+  void node.offsetWidth;
+  node.classList.add('pane-enter');
+  node.addEventListener('animationend', () => node.classList.remove('pane-enter'), { once: true });
+}
+
+// 将主题色桥接到原始 ActiveTheory 场景。163° 是原场景的基准色，保持默认视觉不变。
+function syncWorkspaceTheme() {
+  const theme = document.documentElement.dataset.theme || 'deep-space';
+  const defaults = { 'deep-space': 163, 'mono-light': 198, 'warm-night': 28, contrast: 163 };
+  const hueValue = state.themeHue === '' || state.themeHue === null || state.themeHue === undefined
+    ? (defaults[theme] ?? 163)
+    : Number(state.themeHue);
+  const hue = Number.isFinite(hueValue) ? ((hueValue % 360) + 360) % 360 : 163;
+  const saturation = theme === 'mono-light' ? 0.9 : theme === 'contrast' ? 0.82 : theme === 'warm-night' ? 1.06 : 1;
+  document.documentElement.style.setProperty('--scene-hue', `${hue}`);
+  archiveFrame?.contentWindow?.postMessage({ type: 'tingyu:theme', hue, saturation }, 'tingyu-ui://archive');
 }
 
 function button(text, className = 'button button-quiet') {
@@ -1044,6 +1074,7 @@ function renderConversation() {
         await selectConversation(item.id);
         state.mobileChat = true;
         renderConversation();
+        animatePaneEntrance(document.querySelector('.conversation-main'));
       } catch (error) {
         showError(error.message);
       }
@@ -1157,16 +1188,6 @@ function renderConversation() {
   stream.dataset.conversation = state.currentConversation?.id || '';
   stream.setAttribute('aria-label', '聊天消息');
   stream.tabIndex = 0;
-  // 自定义聊天背景。
-  if (state.chatBackground) {
-    if (state.chatBackground.startsWith('data:image/')) {
-      stream.style.backgroundImage = `url("${state.chatBackground}")`;
-      stream.style.backgroundSize = 'cover';
-      stream.style.backgroundPosition = 'center';
-    } else {
-      stream.style.background = state.chatBackground;
-    }
-  }
   main.append(stream);
   const form = document.createElement('form');
   form.className = 'message-form';
@@ -2443,6 +2464,7 @@ function applyThemeHue(hue) {
     root.style.removeProperty('--accent');
     root.style.removeProperty('--focus');
     root.style.removeProperty('--accent-text');
+    syncWorkspaceTheme();
     return;
   }
   const h = ((Number(hue) % 360) + 360) % 360;
@@ -2451,6 +2473,7 @@ function applyThemeHue(hue) {
   root.style.setProperty('--focus', `hsl(${h} ${light ? 72 : 66}% ${light ? 48 : 64}%)`);
   // 强调色上的文字按亮度选黑白，保证可读
   root.style.setProperty('--accent-text', light ? '#FFFFFF' : (h > 40 && h < 200 ? '#101418' : '#FFFFFF'));
+  syncWorkspaceTheme();
 }
 
 // 应用背景图：铺在 body 底层，面板转为半透明材质（材质层次 = 层级）
@@ -2891,10 +2914,10 @@ function openCallSettingsDialog() {
   document.body.append(backdrop);
 }
 
-async function renderSettings() {
+async function renderSettings(expectedGeneration = routeGeneration) {
   const routeAtStart = location.hash;
   const settings = await window.desktop.app.settings.get();
-  if (location.hash !== routeAtStart) return;
+  if (location.hash !== routeAtStart || expectedGeneration !== routeGeneration) return;
   const savedAvatar = settings.avatar || 'preset-1';
   const savedUserAvatar = settings.userAvatar || 'preset-4';
   state.avatars = { ai: savedAvatar, user: savedUserAvatar };
@@ -2957,6 +2980,7 @@ async function renderSettings() {
   [['deep-space', '深空'], ['mono-light', '浅色'], ['warm-night', '暖夜'], ['contrast', '高对比']].forEach(([theme, label]) => {
     const option = button('', 'theme-option');
     option.dataset.theme = theme;
+    option.setAttribute('aria-pressed', String(document.documentElement.dataset.theme === theme));
     option.classList.toggle('selected', document.documentElement.dataset.theme === theme);
     option.innerHTML = `<span class="theme-swatch"></span><strong>${label}</strong>${option.classList.contains('selected') ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>' : ''}`;
     option.addEventListener('click', async () => {
@@ -3096,19 +3120,15 @@ async function renderSettings() {
   callCard.append(callAdvanced);
   content.append(callCard);
 
-  // 聊天背景与通话背景。
+  // 通话背景。历史聊天外观偏好保留在配置中供回退。
   const backgroundCard = document.createElement('section');
   backgroundCard.className = 'settings-card settings-section';
   backgroundCard.innerHTML = '<h2>背景</h2>';
   const backgroundNote = document.createElement('p');
   backgroundNote.className = 'settings-note';
-  backgroundNote.textContent = '聊天背景支持纯色与图片。通话背景还可以用内置动效场景，或自己的图片、视频、HTML 页面。';
+  backgroundNote.textContent = '通话背景支持内置场景，以及自己的图片、视频和 HTML 页面。';
   backgroundCard.append(backgroundNote);
   backgroundCard.append(
-    backgroundPicker('聊天背景', state.chatBackground, value => {
-      state.chatBackground = value;
-      return window.desktop.app.settings.save({ chatBackground: value });
-    }),
     backgroundPicker('通话背景', state.callBackground, value => {
       state.callBackground = value;
       return window.desktop.app.settings.save({ callBackground: value });
@@ -3613,28 +3633,43 @@ async function refresh() {
   renderRoute();
 }
 
+let displayedRoute = '';
+let routeTransition = null;
+let routeGeneration = 0;
 function renderRoute() {
   const route = location.hash || '#/home';
   const pathName = route.split('?')[0].replace(/^#/, '') || '/home';
   if ((state.recording || state.recordingPending) && pathName !== '/conversation') {
-    location.hash = '#/conversation';
-    showError('请等待语音发送完成再离开聊天');
-    return;
+    location.hash = '#/conversation'; showError('请等待语音发送完成再离开聊天'); return;
   }
+  const generation = ++routeGeneration;
+  const changed = displayedRoute && displayedRoute !== pathName;
+  displayedRoute = pathName;
+  const render = () => {
+    if (generation !== routeGeneration) return;
   disposeFeatureHub();
   disposeWorkspace();
   closeMessageMenu();
   document.body.classList.toggle('hub-route', pathName === '/home');
   window.desktop.app.setWindowSurface?.(pathName === '/home' ? 'hub' : document.documentElement.dataset.theme)?.catch(() => {});
+  syncWorkspaceTheme();
   content.classList.toggle('chat-content', pathName === '/conversation');
   // 供应商已并入设置，侧边只保留聊天 / 通话 / 收藏 / 设置。
   setActiveNav(pathName === '/providers' ? '/settings' : pathName);
-  if (pathName === '/home') renderFeatureHub();
-  else if (pathName === '/conversation') renderConversation();
-  else if (pathName === '/call') renderCall();
-  else if (pathName === '/favorites') renderFavorites();
-  else if (pathName === '/providers') renderProviders();
-  else renderSettings();
+  if (pathName === '/home') return renderFeatureHub();
+  else if (pathName === '/conversation') return renderConversation();
+  else if (pathName === '/call') return renderCall();
+  else if (pathName === '/favorites') return renderFavorites();
+  else if (pathName === '/providers') return renderProviders();
+  else return renderSettings(generation);
+  };
+  routeTransition?.skipTransition();
+  if (changed && document.startViewTransition && !document.hidden && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    routeTransition = document.startViewTransition(render);
+    window.pendingWorkspaceRender = routeTransition.updateCallbackDone;
+    routeTransition.finished.catch(() => {});
+  } else window.pendingWorkspaceRender = Promise.resolve(render());
+  return window.pendingWorkspaceRender;
 }
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
