@@ -90,6 +90,31 @@ let callLogStore;
 let toneOptions = [];
 const agentTickets = new Map();
 
+function settingsSnapshot(config) {
+  return {
+    persona: config.persona,
+    avatar: config.avatar || 'preset-1',
+    userAvatar: config.userAvatar || 'preset-4',
+    theme: config.theme || 'mono-light',
+    phoneStyle: config.phoneStyle !== false,
+    waveform: config.waveform !== false,
+    aiVoiceReply: config.aiVoiceReply === true,
+    visionEnabled: config.visionEnabled === true,
+    chatBackground: config.chatBackground || '',
+    callBackground: config.callBackground || '',
+    callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
+    fluidCursor: config.fluidCursor !== false,
+    backdropDensity: config.backdropDensity === undefined ? '' : config.backdropDensity,
+    backdropPattern: config.backdropPattern || '',
+    backdropShape: config.backdropShape || '',
+    fogColors: config.fogColors || '',
+    themeHue: config.themeHue === undefined ? '' : config.themeHue,
+    appBackground: config.appBackground || '',
+    toneId: config.activeToneId || '',
+    toneText: config.toneText || '',
+  };
+}
+
 function redact(value) {
   return String(value)
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [已隐藏]')
@@ -723,28 +748,7 @@ function registerIpc() {
     writeConfig(app, config, safeStorage);
     return { dataDir: config.dataDir };
   });
-  ipcMain.handle('settings:get', () => ({
-    persona: config.persona,
-    avatar: config.avatar || 'preset-1',
-    userAvatar: config.userAvatar || 'preset-4',
-    theme: config.theme || 'mono-light',
-    phoneStyle: config.phoneStyle !== false,
-    waveform: config.waveform !== false,
-    aiVoiceReply: config.aiVoiceReply === true,
-    visionEnabled: config.visionEnabled === true,
-    chatBackground: config.chatBackground || '',
-    callBackground: config.callBackground || '',
-    callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
-    fluidCursor: config.fluidCursor !== false,
-    backdropDensity: config.backdropDensity === undefined ? '' : config.backdropDensity,
-    backdropPattern: config.backdropPattern || '',
-    backdropShape: config.backdropShape || '',
-    fogColors: config.fogColors || '',
-    themeHue: config.themeHue === undefined ? '' : config.themeHue,
-    appBackground: config.appBackground || '',
-    toneId: config.activeToneId || '',
-    toneText: config.toneText || '',
-  }));
+  ipcMain.handle('settings:get', () => settingsSnapshot(config));
   ipcMain.handle('settings:save', (_event, patch) => {
     if (!patch || typeof patch !== 'object') throw new Error('设置参数无效');
     const next = { ...config };
@@ -827,31 +831,10 @@ function registerIpc() {
       next.toneText = patch.toneText;
     }
     if (typeof patch.toneId === 'string' && toneOptions.some(item => item.id === patch.toneId)) next.activeToneId = patch.toneId;
+    writeConfig(app, next, safeStorage);
     config = next;
-    writeConfig(app, config, safeStorage);
     if (patch.theme && mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitleBarOverlay(titleBarColors(config.theme));
-    return {
-      persona: config.persona,
-      avatar: config.avatar,
-      userAvatar: config.userAvatar,
-      theme: config.theme,
-      phoneStyle: config.phoneStyle !== false,
-      waveform: config.waveform !== false,
-      aiVoiceReply: config.aiVoiceReply === true,
-      visionEnabled: config.visionEnabled === true,
-      chatBackground: config.chatBackground || '',
-      callBackground: config.callBackground || '',
-      callBackdropHue: config.callBackdropHue === undefined ? '' : config.callBackdropHue,
-      fluidCursor: config.fluidCursor !== false,
-      backdropDensity: config.backdropDensity === undefined ? '' : config.backdropDensity,
-      backdropPattern: config.backdropPattern || '',
-      backdropShape: config.backdropShape || '',
-      fogColors: config.fogColors || '',
-      themeHue: config.themeHue === undefined ? '' : config.themeHue,
-      appBackground: config.appBackground || '',
-      toneId: config.activeToneId || '',
-      toneText: config.toneText || '',
-    };
+    return settingsSnapshot(config);
   });
   ipcMain.handle('agent:tones', () => ({ tones: toneOptions, activeToneId: config.activeToneId }));
   ipcMain.handle('agent:tone-set', (_event, id) => {

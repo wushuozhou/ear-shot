@@ -1,16 +1,57 @@
-.nav-en-overlay button:focus-visible {outline:1px solid #c4eaff!important;outline-offset:4px;border-radius:6px}
 .ChatDOM textarea,.ChatDOM p,.ChatDOM a {font-family:nbarchitekt,'Microsoft YaHei',sans-serif!important}
 @media(prefers-reduced-motion:reduce){.nav-en-overlay{transition-duration:.1s!important}}
 
-.nav-en-orb-core{background:url('../images/tingyu-icon.png') center/contain no-repeat!important;box-shadow:none!important}.nav-en-orb-core:after{display:none!important}
 .tingyu-contact-notes{display:none;position:fixed;inset:0;z-index:9998;pointer-events:none;color:#d9e6ed;font:11px/1.5 -apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;letter-spacing:.1em}.tingyu-contact-open .tingyu-contact-notes{display:block}.tingyu-contact-notes span{position:absolute;top:0;left:0;white-space:nowrap;text-shadow:0 1px 8px #000}
 
-/* Match the workspace typography and align the two English actions to the icon. */
-.nav-en-overlay{mix-blend-mode:normal!important}
-.nav-en-overlay button{min-width:80px;min-height:40px;padding:0 8px!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;font-size:12px!important;font-weight:500!important;letter-spacing:.035em!important;line-height:1!important;text-shadow:none!important;color:#e6eef1!important;transition:color 160ms ease}
-.nav-en-overlay button:hover{color:#fff!important;text-shadow:none!important}
-.nav-en-overlay .nav-en-orb{width:34px;height:34px;border-radius:50%;background:#0c1b20a6;box-shadow:inset 0 1px 0 #ffffff1a,0 3px 12px #0003;transform:translate(-50%,-50%)}
-.nav-en-overlay .nav-en-orb-core{width:25px;height:25px}
+/* The original scene owns placement; the DOM layer owns readable navigation. */
+.nav-en-overlay {
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 10003;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+.nav-en-overlay.is-visible { opacity: 1; }
+.nav-en-overlay button {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  min-width: 80px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #e6eef1;
+  font: 400 13px/20px -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  letter-spacing: .01em;
+  font-kerning: normal;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  pointer-events: auto;
+  touch-action: manipulation;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+.nav-en-overlay button:hover { color: #fff; }
+.nav-en-overlay button:active { color: #b9e8e0; }
+.nav-en-overlay button:focus-visible { outline: 1px solid #c4eaff; outline-offset: -3px; }
+.nav-en-orb {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #9cd8d62e;
+  border-radius: 50%;
+  background: #0c1b20a6;
+  box-shadow: inset 0 1px 0 #ffffff1a, 0 3px 12px #0003;
+  transform: translate(-50%, -50%);
+}
+.nav-en-orb-core { width: 25px; height: 25px; background: url('../images/tingyu-icon.png') center/contain no-repeat; }
 
 .tingyu-detail-actions{position:fixed;right:clamp(24px,5vw,80px);bottom:clamp(28px,6vh,68px);z-index:10004;display:flex;align-items:center;gap:12px;animation:detail-actions-in 320ms cubic-bezier(.2,.8,.2,1) both}
 .tingyu-detail-actions[hidden]{display:none}

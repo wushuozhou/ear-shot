@@ -44,6 +44,7 @@ const state = {
   scrollToLatest: false,
 };
 const conversationDrafts = new Map();
+let avatarSaveQueue = Promise.resolve();
 
 const ACTIVE_CONVERSATION_KEY = 'earshot:active-conversation';
 const AVATAR_PRESETS = ['preset-1', 'preset-2', 'preset-3', 'preset-4', 'preset-5', 'preset-6'];
@@ -346,62 +347,93 @@ function paintAvatar(node, value, fallback = 'preset-1') {
   node.classList.add(AVATAR_PRESETS.includes(target) ? target : fallback);
 }
 
-function avatarNode(value, className = '') {
+function avatarNode(value, className = '', fallback = 'preset-1') {
   const node = document.createElement('span');
   node.className = `avatar ${className}`.trim();
-  paintAvatar(node, value);
+  paintAvatar(node, value, fallback);
   return node;
 }
 
 function avatarPicker(initial, onChange, fallback = 'preset-1') {
   let value = initial || fallback;
+  let committedValue = value;
   const wrap = document.createElement('div');
   wrap.className = 'avatar-picker';
   const preview = avatarNode(value, 'avatar-picker-preview');
   const grid = document.createElement('div');
   grid.className = 'avatar-picker-grid';
+  let selection = 0;
+  let idle = Promise.resolve();
   const refresh = () => {
     paintAvatar(preview, value, fallback);
-    grid.querySelectorAll('.avatar-preset').forEach(item => item.classList.toggle('selected', item.dataset.value === value));
+    grid.querySelectorAll('.avatar-preset').forEach(item => {
+      const selected = item.dataset.value ? item.dataset.value === value : isImageAvatar(value);
+      item.classList.toggle('selected', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+  };
+  const commit = async (next, current = ++selection) => {
+    if (wrap.isConnected === false || current !== selection) return;
+    value = next;
+    refresh();
+    try {
+      await onChange(next);
+      committedValue = next;
+    } catch (error) {
+      if (current === selection) { value = committedValue; refresh(); }
+      showError(error.message);
+    }
   };
   AVATAR_PRESETS.forEach(preset => {
     const option = button('', `avatar-preset ${preset}`);
     option.dataset.value = preset;
     option.title = `预设 ${preset.slice(-1)}`;
-    option.addEventListener('click', () => {
-      value = preset;
-      refresh();
-      onChange(value);
-    });
+    option.setAttribute('aria-label', `预设头像 ${preset.slice(-1)}`);
+    option.addEventListener('click', () => commit(preset));
     grid.append(option);
   });
-  const upload = document.createElement('label');
-  upload.className = 'avatar-preset avatar-upload-mini';
+  const upload = button('+', 'avatar-preset avatar-upload-mini');
   upload.title = '上传图片';
-  upload.textContent = '+';
+  upload.setAttribute('aria-label', '上传头像');
+  upload.setAttribute('aria-pressed', 'false');
   const file = document.createElement('input');
   file.type = 'file';
   file.hidden = true;
   file.accept = 'image/*';
-  file.addEventListener('change', () => {
+  upload.addEventListener('click', () => file.click());
+  file.addEventListener('change', async () => {
     const image = file.files?.[0];
+    file.value = '';
     if (!image) return;
     if (!image.type.startsWith('image/')) return;
     if (image.size > 2 * 1024 * 1024) {
       showError('图片超过 2MB，请先压缩');
       return;
     }
-    const reader = new FileReader();
-    reader.addEventListener('load', () => {
-      value = String(reader.result);
-      refresh();
-      onChange(value);
-    });
-    reader.readAsDataURL(image);
+    const current = ++selection;
+    idle = (async () => {
+      try {
+        const source = new Image();
+        source.src = await readFileAsDataUrl(image);
+        await source.decode();
+        if (wrap.isConnected === false || current !== selection) return;
+        const side = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = side; canvas.height = side;
+        const scale = Math.max(side / source.width, side / source.height);
+        const width = source.width * scale, height = source.height * scale;
+        canvas.getContext('2d').drawImage(source, (side - width) / 2, (side - height) / 2, width, height);
+        await commit(canvas.toDataURL('image/png'), current);
+      } catch (error) {
+        if (wrap.isConnected && current === selection) showError(`头像无法读取：${error.message}`);
+      }
+    })();
+    await idle;
   });
-  upload.append(file);
   grid.append(upload);
-  wrap.append(preview, grid);
+  wrap.append(preview, grid, file);
+  wrap.cancelPending = () => { selection += 1; };
+  wrap.whenIdle = () => idle;
   refresh();
   return wrap;
 }
@@ -776,7 +808,7 @@ function renderConversationMessages(streamingOnly = false) {
     } else {
       bubble.append(attachmentBubble(message));
     }
-    const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar');
+    const avatar = avatarNode(role === 'user' ? state.avatars.user : assistantAvatar, 'message-avatar', role === 'user' ? 'preset-4' : 'preset-1');
     if (role === 'user') row.append(bubble, avatar);
     else row.append(avatar, bubble);
     if (streaming) {
@@ -1481,10 +1513,11 @@ function openConversationEditor(item) {
   avatarField.className = 'editor-field';
   const avatarTitle = document.createElement('span');
   avatarTitle.textContent = 'AI 头像';
-  avatarField.append(avatarTitle, avatarPicker(pendingAvatar, value => {
+  const contactAvatarPicker = avatarPicker(pendingAvatar, value => {
     pendingAvatar = value;
     paintAvatar(previewAvatar, value);
-  }));
+  });
+  avatarField.append(avatarTitle, contactAvatarPicker);
 
   const modelSelect = document.createElement('select');
   const follow = document.createElement('option');
@@ -1553,6 +1586,8 @@ function openConversationEditor(item) {
     }
     save.disabled = true;
     try {
+      await contactAvatarPicker.whenIdle();
+      if (!modal.isConnected) return;
       const updated = await window.desktop.agent.conversationUpdate(item.id, {
         title,
         avatar: pendingAvatar,
@@ -2916,6 +2951,7 @@ function openCallSettingsDialog() {
 
 async function renderSettings(expectedGeneration = routeGeneration) {
   const routeAtStart = location.hash;
+  await avatarSaveQueue;
   const settings = await window.desktop.app.settings.get();
   if (location.hash !== routeAtStart || expectedGeneration !== routeGeneration) return;
   const savedAvatar = settings.avatar || 'preset-1';
@@ -3024,39 +3060,48 @@ async function renderSettings(expectedGeneration = routeGeneration) {
   const avatarCard = document.createElement('section');
   avatarCard.className = 'settings-card settings-section';
   avatarCard.innerHTML = '<h2>头像</h2>';
-  let pendingAi = savedAvatar;
-  let pendingUser = savedUserAvatar;
   const avatarGrid = document.createElement('div');
   avatarGrid.className = 'avatar-duo';
+  const avatarPickers = [];
+  const saveAvatars = patch => {
+    const save = avatarSaveQueue.then(() => window.desktop.app.settings.save(patch)).then(saved => {
+      state.avatars = { ai: saved.avatar || 'preset-1', user: saved.userAvatar || 'preset-4' };
+      if (location.hash === '#/conversation') renderConversationMessages();
+    });
+    avatarSaveQueue = save.catch(() => {});
+    return save;
+  };
   const avatarBlock = (title, initial, fallback, onChange) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'avatar-block';
     const label = document.createElement('div');
     label.className = 'avatar-block-title';
     label.textContent = title;
-    wrapper.append(label, avatarPicker(initial, onChange, fallback));
+    const picker = avatarPicker(initial, onChange, fallback);
+    avatarPickers.push(picker);
+    wrapper.append(label, picker);
     return wrapper;
   };
   avatarGrid.append(
-    avatarBlock('AI 头像', pendingAi, 'preset-1', value => { pendingAi = value; }),
-    avatarBlock('我的头像', pendingUser, 'preset-4', value => { pendingUser = value; }),
+    avatarBlock('AI 头像', savedAvatar, 'preset-1', value => saveAvatars({ avatar: value })),
+    avatarBlock('我的头像', savedUserAvatar, 'preset-4', value => saveAvatars({ userAvatar: value })),
   );
   const avatarActions = document.createElement('div');
   avatarActions.className = 'settings-actions';
-  const avatarSave = button('保存');
   const avatarReset = button('恢复默认', 'button button-quiet');
-  avatarSave.addEventListener('click', async () => {
-    await window.desktop.app.settings.save({ avatar: pendingAi, userAvatar: pendingUser });
-    state.avatars = { ai: pendingAi, user: pendingUser };
-    avatarSave.textContent = '已保存';
-    setTimeout(() => { avatarSave.textContent = '保存'; }, 1200);
+  avatarReset.addEventListener('click', async () => {
+    avatarReset.disabled = true;
+    avatarPickers.forEach(picker => picker.cancelPending());
+    try {
+      await saveAvatars({ avatar: 'preset-1', userAvatar: 'preset-4' });
+      if (location.hash === routeAtStart && expectedGeneration === routeGeneration) await renderSettings(expectedGeneration);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      avatarReset.disabled = false;
+    }
   });
-  avatarReset.addEventListener('click', () => {
-    pendingAi = 'preset-1';
-    pendingUser = 'preset-4';
-    renderSettings();
-  });
-  avatarActions.append(avatarSave, avatarReset);
+  avatarActions.append(avatarReset);
   avatarCard.append(avatarGrid, avatarActions);
   content.append(avatarCard);
 
@@ -3452,26 +3497,21 @@ function settingRow(label, value) {
   return row;
 }
 
-function showError(message) {
+let noticeTimer;
+function showNotice(message, success) {
   const notice = $('#notice');
-  notice.textContent = message;
-  notice.classList.remove('notice-success');
+  clearTimeout(noticeTimer);
+  notice.textContent = String(message || '').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+  notice.classList.toggle('notice-success', success);
   notice.classList.remove('hidden');
-  setTimeout(() => {
-    if (state.service.status !== 'failed') notice.classList.add('hidden');
-  }, 4000);
+  noticeTimer = setTimeout(() => {
+    if (state.service.status === 'failed') renderTop();
+    else notice.classList.add('hidden');
+  }, success ? 3000 : 4000);
 }
 
-function showMessage(message) {
-  const notice = $('#notice');
-  notice.textContent = message;
-  notice.classList.remove('hidden');
-  notice.classList.add('notice-success');
-  setTimeout(() => {
-    notice.classList.add('hidden');
-    notice.classList.remove('notice-success');
-  }, 3000);
-}
+function showError(message) { showNotice(message, false); }
+function showMessage(message) { showNotice(message, true); }
 
 function field(label, name, value, type = 'text', full = false) {
   const wrapper = document.createElement('div');
@@ -3674,29 +3714,6 @@ function renderRoute() {
 
 // 外观以主进程配置为准（默认浅色），避免旧版 localStorage 里的深色值覆盖默认值。
 document.documentElement.dataset.theme = 'deep-space';
-
-// 侧边栏收起/展开，状态记在本地，下次打开保持。
-const SIDEBAR_KEY = 'earshot:sidebar-collapsed';
-function applySidebarCollapsed(collapsed) {
-  const shell = document.querySelector('.shell');
-  const toggle = $('#sidebar-toggle');
-  if (shell) shell.classList.toggle('sidebar-collapsed', collapsed);
-  if (toggle) {
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-    toggle.title = collapsed ? '展开侧边栏' : '收起侧边栏';
-    toggle.setAttribute('aria-label', toggle.title);
-  }
-  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : ''); } catch (_) { /* 存不下不影响使用 */ }
-}
-
-(() => {
-  let collapsed = false;
-  try { collapsed = localStorage.getItem(SIDEBAR_KEY) === '1'; } catch (_) { collapsed = false; }
-  applySidebarCollapsed(collapsed);
-  $('#sidebar-toggle')?.addEventListener('click', () => {
-    applySidebarCollapsed(!document.querySelector('.shell')?.classList.contains('sidebar-collapsed'));
-  });
-})();
 
 $('#open-logs')?.addEventListener('click', () => window.desktop.app.openPath('logs'));
 window.addEventListener('hashchange', renderRoute);

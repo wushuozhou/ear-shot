@@ -58,7 +58,7 @@
   document.documentElement.classList.toggle('desktop-window', !!real);
   const invoke = async (fn, fallback) => {
     if (!real) return fallback();
-    try { return await fn(); } catch (error) { throw error; }
+    return fn();
   };
   const settingsSnapshot = () => ({
     persona: memory.persona,
