@@ -29,6 +29,18 @@
     ],
     "extraResources": [
       {
+        "from": "../LICENSE",
+        "to": "earshot/LICENSE"
+      },
+      {
+        "from": "../THIRD-PARTY-NOTICES.md",
+        "to": "earshot/THIRD-PARTY-NOTICES.md"
+      },
+      {
+        "from": "../licenses",
+        "to": "earshot/licenses"
+      },
+      {
         "from": "../server",
         "to": "earshot/server"
       },

@@ -7,9 +7,11 @@
 ## 来源与署名
 
 - 本项目基于 [facc33176-rgb/earshot](https://github.com/facc33176-rgb/earshot)（MIT）二次开发，原始版权归 Earshot authors 所有，完整许可见仓库根目录 [LICENSE](./LICENSE)。
-- 语气规则整理自 [facc33176-rgb/tone.skill](https://github.com/facc33176-rgb/tone.skill)（MIT），整理说明见 [desktop/skills/README.md](./desktop/skills/README.md)。
+- 语气规则引用自 [facc33176-rgb/tone.skill](https://github.com/facc33176-rgb/tone.skill)（MIT），包含 5 个规则参考文档和听屿整理的中文预设；完整许可见 [licenses/tone.skill.MIT.txt](./licenses/tone.skill.MIT.txt)。
 - 记忆功能可选对接 [Tidemark](https://github.com/facc33176-rgb/Tidemark-anchor-memory-)（AGPL-3.0），仅通过其 HTTP 接口调用，仓库中不包含其任何代码。
 - 桌面外壳、模型供应商适配层、图形界面为新增部分。
+
+功能代码与原场景资源的许可边界分别列于 [第三方声明](./THIRD-PARTY-NOTICES.md) 和 [许可审计](./COMMERCIAL_LICENSE_AUDIT.md)。ActiveTheory 归档、字体和衍生森林点云按当前自用要求保留，根 MIT 许可不覆盖它们；当前整包不作为已清权的商业发行版。
 
 ## 三步使用
 

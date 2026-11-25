@@ -2,10 +2,10 @@
 
 来源：<https://github.com/facc33176-rgb/tone.skill>
 
-原项目为 MIT License，本目录中的整理内容保留该来源说明，供 Earshot 在本地拼接到系统提示词中使用。
+原项目为 MIT License。根目录 `skills/say-it-like-you-mean-it/` 的 5 个参考文档与上游核验版本一致，完整许可文本保存在该目录的 `LICENSE` 和根目录 `licenses/tone.skill.MIT.txt`；中文预设是听屿基于这些规则整理的本地内容。安装包中的许可位于 `resources/earshot/licenses/`。
 
-这里是根据 `tone.skill` 的统一写作规则、playbook 和标签参考整理出的四个中文预设，不是原仓库完整内容，也没有复制原仓库的全部文件。
+`skills/say-it-like-you-mean-it/` 保留了上游的规则参考，`desktop/skills/tones.json` 提供四个听屿中文预设。两者的用途不同，发布时都应保留来源和 MIT 文本。
 
 规则重点包括：先用自然措辞和标点表达情绪，再谨慎使用可听见的语气标记；标签放在句首、不要重复刷屏；短句要有足够的语气词或停顿；标签描述声音而不是表情和动作。
 
-桌面版关闭 exe 改写（`signAndEditExecutable: false`）是为了绕开 electron-builder 26 的 rcedit 缺陷；代价是 exe 使用 Electron 官方图标和版本信息。
+本目录只用于本地语气预设，打包细节以 `desktop/package.json` 为准。
